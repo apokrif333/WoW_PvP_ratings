@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from math import ceil
 from pathlib import Path
+from textwrap import dedent
 from time import monotonic
 from typing import Any
 
@@ -824,6 +825,264 @@ app = Dash(__name__, title="WoW PvP Data")
 server = app.server
 
 
+PLAYER_TABLE_GUIDE_RU = dedent(
+    """
+    ### Таблица персонажей: что она показывает
+
+    Эта таблица отвечает на вопрос: **какие конкретные персонажи есть в датасете и какие рейтинги у них в разных PvP-режимах**. Одна строка - один персонаж, объединенный по региону, реалму и имени. Данные собираются из Blizzard ladder для Solo Shuffle и Blitz BG, а также из check-pvp для 2v2, 3v3 и RBG.
+
+    **Как пользоваться таблицей**
+
+    - `Region` фильтрует EU/US. Пример: выбери `EU`, чтобы анализировать только европейский ладдер.
+    - `Name` ищет подстроку по всем именам персонажей, а не только по выпадающему списку. Пример: введи `feet`, и таблица найдет `Feetup`, если персонаж есть в базе.
+    - `Realm`, `Class`, `Spec` сужают выборку до конкретного реалма, класса или специализации.
+    - `Rating ranges` задают числовые диапазоны по режимам. Пример: `3v3 >= 2400` через ползунок `3v3` оставит только персонажей с высоким 3v3-рейтингом.
+    - Сортировка по заголовку колонки позволяет быстро находить топов по конкретному режиму.
+    - `Rows` меняет размер страницы, чтобы смотреть больше или меньше строк за раз.
+
+    **Колонки**
+
+    - `Region` - регион персонажа: `eu` или `us`.
+    - `Name` - имя персонажа.
+    - `Realm` - игровой реалм персонажа.
+    - `Class` - класс персонажа, например Druid, Mage, Warrior.
+    - `Spec` - активная специализация, например Restoration, Fire, Arms.
+    - `Shuffle` - текущий Solo Shuffle rating из Blizzard PvP leaderboard. Если персонаж не найден в этом режиме, значение `0`.
+    - `Blitz BG` - текущий Battleground Blitz rating из Blizzard PvP leaderboard. Если участия нет, значение `0`.
+    - `2v2`, `3v3`, `RBG` - рейтинги из check-pvp. Если режима нет в данных, значение `0`.
+
+    **Как читать значения**
+
+    `0` не всегда означает плохой рейтинг. В этой базе это чаще значит **нет найденного участия в конкретном режиме**. Например, персонаж может иметь `2600` в Shuffle и `0` в 3v3, потому что он не играет 3v3 или check-pvp не вернул для него рейтинг.
+
+    **Примеры полезных вопросов**
+
+    - Найти всех персонажей конкретного спека: выбери `Class = Druid`, `Spec = Restoration`.
+    - Найти сильных игроков в одном режиме: выставь `Shuffle` от `2400` и отсортируй по `Shuffle`.
+    - Сравнить режимы у одного персонажа: введи имя в `Name` и посмотри, где у него высокий рейтинг, а где `0`.
+    - Найти реалмовые кластеры: выбери realm и посмотри, какие классы и спеки чаще встречаются в топе.
+
+    **Аналитическая польза**
+
+    Таблица персонажей полезна для точечного поиска: кто играет какой спек, где у персонажа основной рейтинг, какие спеки представлены на высоких рейтингах и есть ли пересечение между режимами. Это нижний уровень данных, из которого строится summary ниже.
+    """
+).strip()
+
+
+PLAYER_TABLE_GUIDE_EN = dedent(
+    """
+    ### Player table: what it shows
+
+    This table answers: **which individual characters are in the dataset and what ratings they have across PvP modes**. One row is one character, merged by region, realm, and character name. Solo Shuffle and Blitz BG come from Blizzard ladders; 2v2, 3v3, and RBG come from check-pvp.
+
+    **How to use it**
+
+    - `Region` filters EU/US. Example: choose `EU` to inspect only the European ladder.
+    - `Name` searches across all character names by substring. Example: type `feet` to find `Feetup` if that character exists in the dataset.
+    - `Realm`, `Class`, and `Spec` narrow the table to a realm, class, or specialization.
+    - `Rating ranges` filter numeric ratings by mode. Example: set `3v3` to `2400+` to keep only high-rated 3v3 characters.
+    - Click a column header to sort by that column.
+    - `Rows` changes how many rows are shown per page.
+
+    **Columns**
+
+    - `Region` - character region: `eu` or `us`.
+    - `Name` - character name.
+    - `Realm` - character realm.
+    - `Class` - class name, such as Druid, Mage, Warrior.
+    - `Spec` - active specialization, such as Restoration, Fire, Arms.
+    - `Shuffle` - current Solo Shuffle rating from Blizzard PvP leaderboards. Missing participation is shown as `0`.
+    - `Blitz BG` - current Battleground Blitz rating from Blizzard PvP leaderboards. Missing participation is shown as `0`.
+    - `2v2`, `3v3`, `RBG` - ratings from check-pvp. Missing mode data is shown as `0`.
+
+    **How to interpret values**
+
+    `0` does not always mean a weak character. In this dataset it usually means **no detected participation in that mode**. A character can have `2600` in Shuffle and `0` in 3v3 because they do not play 3v3 or because check-pvp did not return a rating for that mode.
+
+    **Useful questions this table can answer**
+
+    - Find all characters of a spec: choose `Class = Druid`, `Spec = Restoration`.
+    - Find strong players in one mode: set `Shuffle` to `2400+` and sort by `Shuffle`.
+    - Compare one character across modes: type a name and inspect where the character has ratings.
+    - Inspect realm-level patterns: filter a realm and look at which specs/classes appear at high rating.
+
+    **Analytical value**
+
+    The player table is for exact lookup and micro-analysis: who plays what, which mode is a character's main mode, which specs appear at high ratings, and whether strong players overlap across modes. It is the raw character layer used to build the summary table below.
+    """
+).strip()
+
+
+SUMMARY_TABLE_GUIDE_RU = dedent(
+    """
+    ### Spec Summary: что показывает вторая таблица
+
+    Summary агрегирует персонажей по связке **Class + Spec + Game Mode + Region**. Она отвечает не на вопрос "кто конкретно играет", а на вопрос **как распределены спеки в режиме и насколько часто конкретный спек встречается среди сильных игроков**.
+
+    **Как пользоваться**
+
+    - `Game Mode` выбирает режим анализа: Shuffle, Blitz BG, 2v2, 3v3 или RBG.
+    - `Region` выбирает срез: `Both`, `US`, `EU`.
+    - `Class` и `Spec` позволяют смотреть конкретный класс/спек или сравнивать несколько.
+    - `Extra Columns` добавляет статистические колонки: процентили, средние, доли, lift.
+    - `Summary numeric ranges` фильтрует summary по числовым метрикам. Пример: можно оставить только спеки с `lift_p80_plus > 1.2`.
+
+    **Базовые колонки**
+
+    - `Spec`, `Class` - специализация и класс, по которым сделана агрегация.
+    - `Game Mode` - режим, рейтинг которого используется в расчетах.
+    - `Region` - срез региона: Both, EU или US.
+    - `Total Players` - количество персонажей этого спека в выбранном режиме/регионе.
+    - `n_0_1400`, `n_1400_1800`, `n_1800_2100`, `n_2100_plus` - сколько персонажей спека попало в каждый рейтинговый диапазон.
+
+    **Процентные колонки**
+
+    - `pct_0_1400 = n_0_1400 / total_players`.
+    - `pct_1400_1800 = n_1400_1800 / total_players`.
+    - `pct_1800_2100 = n_1800_2100 / total_players`.
+    - `pct_2100_plus = n_2100_plus / total_players`.
+
+    Эти колонки показывают внутреннюю структуру спека. Например, если у спека высокий `pct_2100_plus`, значит заметная часть его игроков находится в верхнем диапазоне рейтинга.
+
+    **Средние и процентили**
+
+    - `mean_rating_all` - средний рейтинг всех персонажей спека.
+    - `median_rating_all` - медиана рейтинга всех персонажей спека.
+    - `q20_rating_all` и `q80_rating_all` - 20-й и 80-й процентили рейтинга всех персонажей спека.
+    - `mean_rating_1800_plus`, `median_rating_1800_plus`, `q20_rating_1800_plus`, `q80_rating_1800_plus` - те же метрики, но только среди персонажей с рейтингом `>= 1800`.
+
+    Процентили полезнее среднего, когда распределение неровное. Например, один очень высокий игрок может поднять среднее, но медиана и q80 лучше показывают типичный верхний уровень спека.
+
+    **Доли и lift**
+
+    - `overall_spec_share = total_players_спека / total_players_всех_спеков`.
+    - `spec_share_1800_plus = players_спека_с_rating>=1800 / players_всех_спеков_с_rating>=1800`.
+    - `lift_1800_plus = spec_share_1800_plus / overall_spec_share`.
+
+    Если `lift_1800_plus = 1.00`, спек представлен среди 1800+ примерно так же, как в общей популяции. Если `lift_1800_plus = 1.50`, спек встречается среди 1800+ на 50% чаще, чем ожидалось по его общей доле. Если `0.70`, спек недопредставлен.
+
+    **Mode-specific P80 lift**
+
+    `lift_p80_plus` похож на `lift_1800_plus`, но порог считается отдельно для каждого режима как **80-й процентиль рейтинга всех активных персонажей режима**. Это важно, потому что распределения в Shuffle, Blitz, 2v2, 3v3 и RBG разные. Один фиксированный порог `1800` может быть слишком мягким для одного режима и слишком жестким для другого.
+
+    Расчет:
+
+    - Берем всех активных персонажей режима с `rating > 0`.
+    - Считаем 80-й процентиль рейтинга этого режима.
+    - Считаем долю спека среди персонажей выше этого порога.
+    - Делим ее на долю спека среди всех активных персонажей режима.
+
+    **Какой вывод делать из lift**
+
+    - `lift > 1` - спек чаще встречается в верхнем рейтинговом сегменте, чем в общей базе. Это может указывать на силу спека, высокий skill ceiling, популярность среди сильных игроков или метовую востребованность.
+    - `lift около 1` - спек представлен примерно нейтрально.
+    - `lift < 1` - спек реже доходит до верхнего сегмента, чем ожидалось по численности. Это может указывать на сложность спека, слабую мету, низкую популярность среди сильных игроков или специфику режима.
+
+    Важно: lift не доказывает баланс сам по себе. Он показывает **представленность**, а не прямую причинность. Для надежного вывода смотри одновременно `Total Players`, `pct_2100_plus`, `q80_rating_all`, `lift_1800_plus` и `lift_p80_plus`.
+    """
+).strip()
+
+
+SUMMARY_TABLE_GUIDE_EN = dedent(
+    """
+    ### Spec Summary: what the second table shows
+
+    The summary table aggregates characters by **Class + Spec + Game Mode + Region**. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears among stronger players**.
+
+    **How to use it**
+
+    - `Game Mode` selects the rating mode: Shuffle, Blitz BG, 2v2, 3v3, or RBG.
+    - `Region` selects the slice: `Both`, `US`, or `EU`.
+    - `Class` and `Spec` focus the table on specific classes/specs.
+    - `Extra Columns` adds statistical columns: percentiles, averages, shares, and lift.
+    - `Summary numeric ranges` filters the summary by metrics. Example: keep only specs with `lift_p80_plus > 1.2`.
+
+    **Core columns**
+
+    - `Spec`, `Class` - specialization and class used for aggregation.
+    - `Game Mode` - the mode whose rating is being analyzed.
+    - `Region` - Both, EU, or US.
+    - `Total Players` - number of characters of that spec in the selected mode/region.
+    - `n_0_1400`, `n_1400_1800`, `n_1800_2100`, `n_2100_plus` - counts of spec players in each rating band.
+
+    **Percentage columns**
+
+    - `pct_0_1400 = n_0_1400 / total_players`.
+    - `pct_1400_1800 = n_1400_1800 / total_players`.
+    - `pct_1800_2100 = n_1800_2100 / total_players`.
+    - `pct_2100_plus = n_2100_plus / total_players`.
+
+    These columns describe the internal rating structure of a spec. For example, a high `pct_2100_plus` means a meaningful share of that spec's players sit in the upper rating band.
+
+    **Averages and percentiles**
+
+    - `mean_rating_all` - average rating of all characters of the spec.
+    - `median_rating_all` - median rating of all characters of the spec.
+    - `q20_rating_all` and `q80_rating_all` - 20th and 80th rating percentiles for the spec.
+    - `mean_rating_1800_plus`, `median_rating_1800_plus`, `q20_rating_1800_plus`, `q80_rating_1800_plus` - the same metrics, but only for characters with rating `>= 1800`.
+
+    Percentiles are often more stable than the mean when distributions are uneven. One extreme player can pull the average up, while median and q80 better describe the typical upper range of a spec.
+
+    **Shares and lift**
+
+    - `overall_spec_share = spec_total_players / all_specs_total_players`.
+    - `spec_share_1800_plus = spec_players_rating>=1800 / all_specs_players_rating>=1800`.
+    - `lift_1800_plus = spec_share_1800_plus / overall_spec_share`.
+
+    If `lift_1800_plus = 1.00`, the spec is represented among 1800+ players roughly as often as expected from its overall population share. If `lift_1800_plus = 1.50`, the spec appears among 1800+ players 50% more often than expected. If it is `0.70`, the spec is underrepresented.
+
+    **Mode-specific P80 lift**
+
+    `lift_p80_plus` is similar to `lift_1800_plus`, but the cutoff is calculated separately for each mode as the **80th percentile rating of all active characters in that mode**. This matters because Shuffle, Blitz, 2v2, 3v3, and RBG have different rating distributions. A fixed `1800` cutoff can be too easy in one mode and too strict in another.
+
+    Calculation:
+
+    - Take all active characters in the mode with `rating > 0`.
+    - Calculate the mode's 80th percentile rating.
+    - Calculate the spec's share among characters at or above that cutoff.
+    - Divide it by the spec's share among all active characters in that mode.
+
+    **How to interpret lift**
+
+    - `lift > 1` - the spec appears in the upper rating segment more often than its population share predicts. This can suggest spec strength, high skill ceiling, popularity among strong players, or meta relevance.
+    - `lift around 1` - neutral representation.
+    - `lift < 1` - the spec reaches the upper segment less often than expected from its population size. This can point to difficulty, weaker meta position, lower adoption by strong players, or mode-specific limitations.
+
+    Lift does not prove balance by itself. It measures **representation**, not direct causality. For stronger conclusions, look at `Total Players`, `pct_2100_plus`, `q80_rating_all`, `lift_1800_plus`, and `lift_p80_plus` together.
+    """
+).strip()
+
+
+def make_info_tabs(component_id: str, russian_text: str, english_text: str) -> html.Div:
+    return html.Div(
+        className="info-panel",
+        children=[
+            dcc.Tabs(
+                id=f"{component_id}-tabs",
+                value="ru",
+                className="info-tabs",
+                parent_className="info-tabs-wrap",
+                children=[
+                    dcc.Tab(
+                        label="Русский",
+                        value="ru",
+                        className="info-tab",
+                        selected_className="info-tab info-tab-selected",
+                        children=dcc.Markdown(russian_text, className="info-copy"),
+                    ),
+                    dcc.Tab(
+                        label="English",
+                        value="en",
+                        className="info-tab",
+                        selected_className="info-tab info-tab-selected",
+                        children=dcc.Markdown(english_text, className="info-copy"),
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
 def layout() -> html.Div:
     refresh_application_data_if_changed()
 
@@ -854,6 +1113,7 @@ def layout() -> html.Div:
                     html.Button("Reset", id="reset-filters", className="reset-button", n_clicks=0),
                 ],
             ),
+            make_info_tabs("player-table-guide", PLAYER_TABLE_GUIDE_RU, PLAYER_TABLE_GUIDE_EN),
             html.Div(
                 className="filters main-filters",
                 children=[
@@ -941,6 +1201,7 @@ def layout() -> html.Div:
                     ),
                 ],
             ),
+            make_info_tabs("summary-table-guide", SUMMARY_TABLE_GUIDE_RU, SUMMARY_TABLE_GUIDE_EN),
             html.Div(
                 className="filters summary-filters",
                 children=[
