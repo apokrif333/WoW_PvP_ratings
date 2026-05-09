@@ -1,6 +1,8 @@
 dash==4.1.0
+gunicorn>=23,<24
 pandas==3.0.2
 plotly==6.7.0
+psycopg[binary]>=3.2,<4
 py-mini-racer==0.6.0
 pyarrow==24.0.0
 python-dotenv==1.2.2

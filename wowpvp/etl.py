@@ -5,23 +5,11 @@ from pathlib import Path
 import pandas as pd
 
 from wowpvp.constants import CLASS_ID_TO_NAME, SPEC_ID_TO_INFO
+from wowpvp.storage import PLAYER_COLUMNS, write_players_to_database
 from wowpvp.utils import ensure_dirs, player_key, slugify_realm
 
 
-FINAL_COLUMNS = [
-    "player_key",
-    "region",
-    "character_name",
-    "realm",
-    "realm_slug",
-    "class_name",
-    "spec_name",
-    "shuffle_rating",
-    "blitz_rating",
-    "rating_2v2",
-    "rating_3v3",
-    "rating_rbg",
-]
+FINAL_COLUMNS = PLAYER_COLUMNS
 
 
 def load_raw_blizzard(data_dir: Path) -> pd.DataFrame:
@@ -130,7 +118,11 @@ def optional_series(df: pd.DataFrame, column: str, default: str | int = "") -> p
     return pd.Series([default] * len(df), index=df.index)
 
 
-def build_final_dataset(data_dir: Path) -> Path:
+def build_final_dataset(
+    data_dir: Path,
+    write_csv: bool = True,
+    write_database: bool = True,
+) -> Path:
     ensure_dirs(data_dir)
     blizzard = prepare_blizzard(load_raw_blizzard(data_dir))
     checkpvp = prepare_checkpvp(load_raw_checkpvp(data_dir))
@@ -163,5 +155,10 @@ def build_final_dataset(data_dir: Path) -> Path:
     output_path = data_dir / "processed" / "pvp_players.parquet"
     csv_path = data_dir / "processed" / "pvp_players.csv"
     final.to_parquet(output_path, index=False)
-    final.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    if write_csv:
+        final.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    elif csv_path.exists():
+        csv_path.unlink()
+    if write_database:
+        write_players_to_database(final)
     return output_path

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import re
+import shutil
 import unicodedata
 from pathlib import Path
+
+
+GENERATED_DATA_DIRS = ("cache", "raw", "processed")
 
 
 def ensure_dirs(data_dir: Path) -> None:
@@ -13,6 +17,20 @@ def ensure_dirs(data_dir: Path) -> None:
         data_dir / "processed",
     ]:
         path.mkdir(parents=True, exist_ok=True)
+
+
+def reset_generated_data(data_dir: Path) -> None:
+    data_dir = data_dir.resolve()
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    for directory_name in GENERATED_DATA_DIRS:
+        target = (data_dir / directory_name).resolve()
+        if data_dir not in target.parents:
+            raise RuntimeError(f"Refusing to delete path outside data dir: {target}")
+        if target.exists():
+            shutil.rmtree(target)
+
+    ensure_dirs(data_dir)
 
 
 def normalize_character_name(name: str) -> str:

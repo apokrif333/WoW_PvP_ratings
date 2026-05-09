@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,7 @@ class CheckPvpClient:
         self.timeout = timeout
         self.session = self._make_session()
         self.signer = self._load_signer()
+        self._signer_lock = threading.Lock()
 
     def _make_session(self) -> Session:
         session = requests.Session()
@@ -39,7 +42,7 @@ class CheckPvpClient:
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["GET"],
         )
-        adapter = HTTPAdapter(max_retries=retry)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=64, pool_maxsize=64)
         session.mount("https://", adapter)
         session.headers.update(
             {
@@ -93,7 +96,8 @@ class CheckPvpClient:
         return ctx
 
     def get_json(self, path: str) -> dict[str, Any]:
-        signature = self.signer.eval(f"_0x4f2a({path!r},0,0)")
+        with self._signer_lock:
+            signature = self.signer.eval(f"_0x4f2a({path!r},0,0)")
         response = self.session.get(
             f"{CHECKPVP_ORIGIN}/api/{path}",
             headers={
@@ -122,6 +126,7 @@ def fetch_region_rankings(
     delay_seconds: float,
     max_pages: int | None,
     force: bool,
+    max_workers: int,
 ) -> pd.DataFrame:
     cache_dir = data_dir / "cache" / "checkpvp"
     raw_path = data_dir / "raw" / f"checkpvp_{region}.parquet"
@@ -141,8 +146,9 @@ def fetch_region_rankings(
         page_count = min(page_count, max_pages)
     print(f"check-pvp {region}: total={total}, pages={page_count}, page_size={page_size}")
 
-    rows: list[dict[str, Any]] = []
-    for page in range(1, page_count + 1):
+    page_rows: dict[int, list[dict[str, Any]]] = {}
+
+    def fetch_page(page: int) -> tuple[int, list[dict[str, Any]]]:
         page_file = cache_dir / f"ranking_{region}_page_{page}.json"
         if page == 1:
             data = first_page
@@ -155,8 +161,27 @@ def fetch_region_rankings(
             time.sleep(delay_seconds)
 
         characters = data.get("characters") or []
-        rows.extend(characters)
-        print(f"check-pvp {region}: page {page}/{page_count} rows={len(characters)}")
+        return page, characters
+
+    worker_count = max(1, min(max_workers, page_count or 1))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {executor.submit(fetch_page, page): page for page in range(1, page_count + 1)}
+        for index, future in enumerate(as_completed(futures), start=1):
+            page, characters = future.result()
+            page_rows[page] = characters
+            print(
+                f"check-pvp {region}: fetched {index}/{page_count} "
+                f"(page {page}) rows={len(characters)}"
+            )
+
+    rows: list[dict[str, Any]] = []
+    for page in range(1, page_count + 1):
+        rows.extend(page_rows.get(page, []))
+
+    for stale_page in cache_dir.glob(f"ranking_{region}_page_*.json"):
+        match = re.search(r"_page_(\d+)\.json$", stale_page.name)
+        if match and int(match.group(1)) > page_count:
+            stale_page.unlink()
 
     df = pd.DataFrame(rows)
     df.to_parquet(raw_path, index=False)
@@ -169,6 +194,7 @@ def fetch_region_rankings(
                 "pages_fetched": page_count,
                 "rows": len(df),
                 "complete": max_pages is None,
+                "parallel_workers": worker_count,
             },
             indent=2,
         ),
@@ -184,17 +210,20 @@ def fetch_checkpvp_rankings(
     delay_seconds: float = 0.20,
     max_pages: int | None = None,
     force: bool = False,
+    max_workers: int = 1,
 ) -> pd.DataFrame:
     ensure_dirs(data_dir)
-    frames = [
-        fetch_region_rankings(
-            client=client,
-            region=region.lower(),
-            data_dir=data_dir,
-            delay_seconds=delay_seconds,
-            max_pages=max_pages,
-            force=force,
+    frames = []
+    for region in regions:
+        frames.append(
+            fetch_region_rankings(
+                client=client,
+                region=region.lower(),
+                data_dir=data_dir,
+                delay_seconds=delay_seconds,
+                max_pages=max_pages,
+                force=force,
+                max_workers=max_workers,
+            )
         )
-        for region in regions
-    ]
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()

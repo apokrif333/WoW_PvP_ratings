@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,7 +35,7 @@ class BlizzardClient:
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["GET", "POST"],
         )
-        adapter = HTTPAdapter(max_retries=retry)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=32, pool_maxsize=32)
         session.mount("https://", adapter)
         session.headers.update({"User-Agent": "WoWPvPData/1.0"})
         return session
@@ -127,6 +127,7 @@ def fetch_blizzard_pvp_data(
     regions: list[str],
     data_dir: Path,
     force: bool = False,
+    max_workers: int = 1,
 ) -> pd.DataFrame:
     ensure_dirs(data_dir)
     all_rows: list[dict[str, Any]] = []
@@ -152,18 +153,31 @@ def fetch_blizzard_pvp_data(
         print(f"Blizzard {region}: season {season_id}, {len(leaderboards)} spec leaderboards")
 
         region_rows: list[dict[str, Any]] = []
-        for index, leaderboard_slug in enumerate(leaderboards, start=1):
+
+        def fetch_leaderboard(leaderboard_slug: str) -> tuple[str, list[dict[str, Any]]]:
             data = client.get(region, f"pvp-season/{season_id}/pvp-leaderboard/{leaderboard_slug}")
             entries = data.get("entries", [])
             rows = extract_leaderboard_rows(region, season_id, leaderboard_slug, entries)
-            region_rows.extend(rows)
-            print(
-                f"Blizzard {region}: {index}/{len(leaderboards)} "
-                f"{leaderboard_slug} rows={len(rows)}"
-            )
-            time.sleep(0.05)
+            return leaderboard_slug, rows
+
+        worker_count = max(1, min(max_workers, len(leaderboards) or 1))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(fetch_leaderboard, leaderboard_slug): leaderboard_slug
+                for leaderboard_slug in leaderboards
+            }
+            for index, future in enumerate(as_completed(futures), start=1):
+                leaderboard_slug, rows = future.result()
+                region_rows.extend(rows)
+                print(
+                    f"Blizzard {region}: {index}/{len(leaderboards)} "
+                    f"{leaderboard_slug} rows={len(rows)}"
+                )
 
         region_df = pd.DataFrame(region_rows)
+        for stale_path in (data_dir / "raw").glob(f"blizzard_{region}_season_*.*"):
+            if stale_path not in {raw_path, meta_path}:
+                stale_path.unlink()
         region_df.to_parquet(raw_path, index=False)
         meta_path.write_text(
             json.dumps(
@@ -172,6 +186,7 @@ def fetch_blizzard_pvp_data(
                     "season_id": season_id,
                     "leaderboards": len(leaderboards),
                     "rows": len(region_df),
+                    "parallel_workers": worker_count,
                 },
                 indent=2,
             ),

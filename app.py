@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from math import ceil
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import pandas as pd
@@ -10,9 +11,11 @@ from dash.dash_table import FormatTemplate
 from dash.dash_table.Format import Format, Scheme
 
 from wowpvp.icons import icon_slug
+from wowpvp.storage import dataset_version, read_processed_players
 
 
 DATA_PATH = Path("data/processed/pvp_players.parquet")
+DATA_REFRESH_CHECK_SECONDS = 60
 RATING_COLUMNS = ["shuffle_rating", "blitz_rating", "rating_2v2", "rating_3v3", "rating_rbg"]
 GAME_MODE_COLUMNS = {
     "Shuffle": "shuffle_rating",
@@ -24,6 +27,7 @@ GAME_MODE_COLUMNS = {
 PAGE_SIZE_OPTIONS = [{"label": str(value), "value": value} for value in (10, 20, 50, 100)]
 MAX_DYNAMIC_OPTIONS = 500
 HIGH_RATING_THRESHOLD = 1800
+PERCENTILE_LIFT_QUANTILE = 0.80
 INTEGER_FORMAT = Format(precision=0, scheme=Scheme.fixed)
 RATING_FORMAT = Format(precision=1, scheme=Scheme.fixed)
 LIFT_FORMAT = Format(precision=2, scheme=Scheme.fixed)
@@ -81,6 +85,7 @@ SUMMARY_COLUMNS = [
     {"name": "overall_spec_share", "id": "overall_spec_share", "type": "numeric", "format": PERCENT_FORMAT},
     {"name": "spec_share_1800_plus", "id": "spec_share_1800_plus", "type": "numeric", "format": PERCENT_FORMAT},
     {"name": "lift_1800_plus", "id": "lift_1800_plus", "type": "numeric", "format": LIFT_FORMAT},
+    {"name": "lift_p80_plus", "id": "lift_p80_plus", "type": "numeric", "format": LIFT_FORMAT},
 ]
 SUMMARY_COLUMN_BY_ID = {column["id"]: column for column in SUMMARY_COLUMNS}
 SUMMARY_COLUMN_IDS = [column["id"] for column in SUMMARY_COLUMNS]
@@ -90,6 +95,7 @@ SUMMARY_NUMERIC_COLUMNS = [
 SUMMARY_OPTIONAL_COLUMN_IDS = [
     column_id for column_id in SUMMARY_COLUMN_IDS if column_id not in SUMMARY_FIXED_COLUMN_IDS
 ]
+SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS = ["lift_1800_plus", "lift_p80_plus"]
 SUMMARY_STRING_COLUMNS = ["spec_name", "class_name", "game_mode", "region_filter"]
 
 RANGE_LABELS = {
@@ -120,6 +126,7 @@ SUMMARY_RANGE_LABELS = {
     "overall_spec_share": "Overall share",
     "spec_share_1800_plus": "1800+ share",
     "lift_1800_plus": "Lift 1800+",
+    "lift_p80_plus": "Lift P80+",
 }
 
 MAIN_COLUMN_TOOLTIPS = {
@@ -160,6 +167,7 @@ SUMMARY_COLUMN_TOOLTIPS = {
     "overall_spec_share": "overall_spec_share = total_players_спека / total_players_всех_спеков.",
     "spec_share_1800_plus": "spec_share_1800_plus = n_(rating>=1800)_спека / n_(rating>=1800)_всех_спеков.",
     "lift_1800_plus": "lift_1800_plus = spec_share_1800_plus / overall_spec_share.",
+    "lift_p80_plus": "lift_p80_plus = spec_share_p80_plus / active_spec_share. P80 cutoff is calculated per game mode.",
 }
 
 FILTER_OPERATORS = [
@@ -204,10 +212,10 @@ SUMMARY_STYLE_CELL_CONDITIONAL = [
 
 
 def load_data() -> pd.DataFrame:
-    if not DATA_PATH.exists():
-        return pd.DataFrame()
+    df = read_processed_players(DATA_PATH)
+    if df.empty:
+        return df
 
-    df = pd.read_parquet(DATA_PATH)
     for column in RATING_COLUMNS:
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
@@ -623,6 +631,36 @@ def make_mean(series: pd.Series) -> float | None:
     return round(float(series.mean()), 2)
 
 
+def active_mode_ratings(df: pd.DataFrame, rating_column: str) -> pd.Series:
+    ratings = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
+    return ratings[ratings > 0]
+
+
+def mode_percentile_cutoff(df: pd.DataFrame, rating_column: str) -> float | None:
+    return make_quantile(active_mode_ratings(df, rating_column), PERCENTILE_LIFT_QUANTILE)
+
+
+def make_p80_lift_tooltip() -> str:
+    if DATA.empty:
+        return (
+            "lift_p80_plus = spec_share_p80_plus / active_spec_share. "
+            "P80 cutoff is calculated per game mode from active characters with rating > 0."
+        )
+
+    cutoffs = []
+    for mode, rating_column in GAME_MODE_COLUMNS.items():
+        cutoff = mode_percentile_cutoff(DATA, rating_column)
+        if cutoff is not None:
+            cutoffs.append(f"{mode} - lift cutoff {int(round(cutoff))}")
+
+    cutoff_text = ", ".join(cutoffs) if cutoffs else "no active ratings yet"
+    return (
+        "lift_p80_plus = spec_share_p80_plus / active_spec_share. "
+        "The cutoff is the 80th percentile rating among active characters "
+        f"(rating > 0) in the same game mode and region. Current Both cutoffs: {cutoff_text}."
+    )
+
+
 def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     rating_column = GAME_MODE_COLUMNS.get(mode, "shuffle_rating")
     region_label = region_filter or "Both"
@@ -634,25 +672,38 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
     total_players = len(df)
     total_1800_plus = int((df[rating_column] >= HIGH_RATING_THRESHOLD).sum())
+    active_df = df[df[rating_column] > 0]
+    total_active_players = len(active_df)
+    p80_cutoff = mode_percentile_cutoff(df, rating_column)
+    total_p80_plus = int((df[rating_column] >= p80_cutoff).sum()) if p80_cutoff is not None else 0
     rows: list[dict[str, Any]] = []
 
     for (class_name, spec_name), group in df.groupby(["class_name", "spec_name"], dropna=False):
         ratings = group[rating_column]
         total = int(len(group))
+        active_total = int((ratings > 0).sum())
         n_0_1400 = int(((ratings >= 0) & (ratings < 1400)).sum())
         n_1400_1800 = int(((ratings >= 1400) & (ratings < 1800)).sum())
         n_1800_2100 = int(((ratings >= 1800) & (ratings < 2100)).sum())
         high_ratings = ratings[ratings >= HIGH_RATING_THRESHOLD]
         n_1800_plus = int(len(high_ratings))
         n_true_2100_plus = int((ratings >= 2100).sum())
+        n_p80_plus = int((ratings >= p80_cutoff).sum()) if p80_cutoff is not None else 0
 
         overall_spec_share = total / total_players if total_players else None
+        active_spec_share = active_total / total_active_players if total_active_players else None
         spec_share_1800_plus = (
             n_1800_plus / total_1800_plus if n_1800_plus and total_1800_plus else None
         )
+        spec_share_p80_plus = n_p80_plus / total_p80_plus if n_p80_plus and total_p80_plus else None
         lift_1800_plus = (
             spec_share_1800_plus / overall_spec_share
             if spec_share_1800_plus is not None and overall_spec_share
+            else None
+        )
+        lift_p80_plus = (
+            spec_share_p80_plus / active_spec_share
+            if spec_share_p80_plus is not None and active_spec_share
             else None
         )
 
@@ -684,6 +735,7 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
                     round(spec_share_1800_plus, 6) if spec_share_1800_plus is not None else None
                 ),
                 "lift_1800_plus": round(lift_1800_plus, 4) if lift_1800_plus is not None else None,
+                "lift_p80_plus": round(lift_p80_plus, 4) if lift_p80_plus is not None else None,
             }
         )
 
@@ -710,15 +762,47 @@ def make_summary(modes: list[str] | None, region_filters: list[str] | None) -> p
     return pd.concat(frames, ignore_index=True)
 
 
-DATA = load_data()
-SUMMARY_ALL_DATA = make_summary(None, None) if not DATA.empty else pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
-MAIN_RANGE_BOUNDS = make_range_bounds(DATA, RATING_COLUMNS)
-SUMMARY_RANGE_BOUNDS = make_range_bounds(SUMMARY_ALL_DATA, SUMMARY_NUMERIC_COLUMNS)
+DATA = pd.DataFrame()
+SUMMARY_ALL_DATA = pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
+MAIN_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
+SUMMARY_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
+DATA_VERSION: str | None = None
+DATA_LAST_CHECK = 0.0
+
+
+def reload_application_data() -> None:
+    global DATA, SUMMARY_ALL_DATA, MAIN_RANGE_BOUNDS, SUMMARY_RANGE_BOUNDS, DATA_VERSION
+
+    DATA = load_data()
+    SUMMARY_ALL_DATA = make_summary(None, None) if not DATA.empty else pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
+    MAIN_RANGE_BOUNDS = make_range_bounds(DATA, RATING_COLUMNS)
+    SUMMARY_RANGE_BOUNDS = make_range_bounds(SUMMARY_ALL_DATA, SUMMARY_NUMERIC_COLUMNS)
+    DATA_VERSION = dataset_version(DATA_PATH)
+    SUMMARY_COLUMN_TOOLTIPS["lift_p80_plus"] = make_p80_lift_tooltip()
+
+
+def refresh_application_data_if_changed(force: bool = False) -> None:
+    global DATA_LAST_CHECK
+
+    now = monotonic()
+    if not force and now - DATA_LAST_CHECK < DATA_REFRESH_CHECK_SECONDS:
+        return
+
+    DATA_LAST_CHECK = now
+    current_version = dataset_version(DATA_PATH)
+    if force or current_version != DATA_VERSION:
+        reload_application_data()
+
+
+reload_application_data()
 
 app = Dash(__name__, title="WoW PvP Data")
+server = app.server
 
 
 def layout() -> html.Div:
+    refresh_application_data_if_changed()
+
     if DATA.empty:
         return html.Div(
             className="page",
@@ -872,7 +956,7 @@ def layout() -> html.Div:
                         "Extra Columns",
                         make_column_options(SUMMARY_OPTIONAL_COLUMN_IDS),
                         "Add stats",
-                        [],
+                        SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS,
                     ),
                     make_page_size_control("summary-page-size", 50),
                 ],
@@ -897,7 +981,7 @@ def layout() -> html.Div:
             ),
             dash_table.DataTable(
                 id="summary-table",
-                columns=summary_visible_columns([]),
+                columns=summary_visible_columns(SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS),
                 tooltip_header=SUMMARY_COLUMN_TOOLTIPS,
                 tooltip_delay=250,
                 tooltip_duration=None,
@@ -947,6 +1031,7 @@ def update_character_options(
     search_value: str | None,
     selected_values: list[str] | str | None,
 ) -> list[dict[str, str]]:
+    refresh_application_data_if_changed()
     return make_limited_options(
         DATA["character_name"],
         selected=selected_values,
@@ -1027,6 +1112,7 @@ def filter_main_rows(
     page_size: int | None,
     sort_by: list[dict] | None,
 ) -> tuple[list[dict], int, str]:
+    refresh_application_data_if_changed()
     df = DATA.copy()
     df = apply_string_filters(
         df,
@@ -1071,6 +1157,7 @@ def update_summary_rows(
     page_size: int | None,
     sort_by: list[dict] | None,
 ) -> tuple[list[dict], int, str, list[dict[str, Any]]]:
+    refresh_application_data_if_changed()
     visible_ids = summary_visible_column_ids(optional_columns)
     visible_columns = summary_visible_columns(optional_columns)
     df = make_summary(modes, regions)
@@ -1126,6 +1213,7 @@ def reset_filters(
     list[list[float | int]],
     list,
 ]:
+    refresh_application_data_if_changed()
     return (
         None,
         None,
@@ -1138,7 +1226,7 @@ def reset_filters(
         ["Both"],
         None,
         None,
-        [],
+        SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS,
         default_range_values(SUMMARY_NUMERIC_COLUMNS, SUMMARY_RANGE_BOUNDS),
         [],
     )
