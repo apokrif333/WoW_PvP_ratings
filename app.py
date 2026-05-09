@@ -18,6 +18,7 @@ from wowpvp.storage import dataset_version, read_processed_players
 
 DATA_PATH = Path("data/processed/pvp_players.parquet")
 DATA_REFRESH_CHECK_SECONDS = 60
+SUMMARY_CACHE_MAX_ITEMS = 24
 RATING_COLUMNS = ["shuffle_rating", "blitz_rating", "rating_2v2", "rating_3v3", "rating_rbg"]
 GAME_MODE_COLUMNS = {
     "Shuffle": "shuffle_rating",
@@ -622,7 +623,7 @@ def apply_string_filters(
     for column, values in filters.items():
         if column not in df.columns or not values:
             continue
-        df = df[df[column].astype(str).isin(values)]
+        df = df[df[column].isin(values)]
     return df
 
 
@@ -630,7 +631,10 @@ def apply_text_contains_filter(df: pd.DataFrame, column: str, value: str | None)
     query = (value or "").strip()
     if not query or column not in df.columns:
         return df
-    return df[df[column].astype(str).str.casefold().str.contains(query.casefold(), regex=False)]
+    series = df[column]
+    if not pd.api.types.is_string_dtype(series):
+        series = series.astype(str)
+    return df[series.str.casefold().str.contains(query.casefold(), regex=False)]
 
 
 def apply_table_sort(
@@ -648,13 +652,12 @@ def apply_table_sort(
 
         ascending = sort_rule.get("direction") == "asc"
         if column_id in numeric_columns:
-            sortable = df.assign(__sort_key=pd.to_numeric(df[column_id], errors="coerce"))
-            df = sortable.sort_values(
-                "__sort_key",
+            df = df.sort_values(
+                column_id,
                 ascending=ascending,
                 kind="mergesort",
                 na_position="last",
-            ).drop(columns="__sort_key")
+            )
         else:
             df = df.sort_values(
                 column_id,
@@ -829,9 +832,32 @@ def make_summary(modes: list[str] | None, region_filters: list[str] | None) -> p
     return pd.concat(frames, ignore_index=True)
 
 
+def make_summary_cache_key(
+    modes: list[str] | None,
+    region_filters: list[str] | None,
+) -> tuple[str | None, tuple[str, ...], tuple[str, ...]]:
+    mode_key = tuple(modes or list(GAME_MODE_COLUMNS.keys()))
+    region_key = tuple(region_filters or ["Both", "US", "EU"])
+    return DATA_VERSION, mode_key, region_key
+
+
+def make_summary_cached(modes: list[str] | None, region_filters: list[str] | None) -> pd.DataFrame:
+    key = make_summary_cache_key(modes, region_filters)
+    cached = SUMMARY_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    summary = make_summary(list(key[1]), list(key[2]))
+    if len(SUMMARY_CACHE) >= SUMMARY_CACHE_MAX_ITEMS:
+        SUMMARY_CACHE.pop(next(iter(SUMMARY_CACHE)))
+    SUMMARY_CACHE[key] = summary
+    return summary
+
+
 DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
 MAIN_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
 SUMMARY_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
+SUMMARY_CACHE: dict[tuple[str | None, tuple[str, ...], tuple[str, ...]], pd.DataFrame] = {}
 DATA_VERSION: str | None = None
 DATA_LAST_CHECK = 0.0
 
@@ -845,6 +871,7 @@ def reload_application_data() -> None:
     MAIN_RANGE_BOUNDS = make_range_bounds(DATA, RATING_COLUMNS)
     SUMMARY_RANGE_BOUNDS = make_summary_range_bounds(DATA)
     DATA_VERSION = dataset_version(DATA_PATH)
+    SUMMARY_CACHE.clear()
     SUMMARY_COLUMN_TOOLTIPS["lift_p80_plus"] = make_p80_lift_tooltip()
     gc.collect()
 
@@ -1358,7 +1385,6 @@ def sync_summary_page_size(page_size: int | None) -> int:
     Input("spec-filter", "value"),
     Input({"type": "main-rating-range", "column": ALL}, "value"),
     Input("main-page-size", "value"),
-    Input("pvp-table", "sort_by"),
 )
 def reset_main_page_on_query_change(
     _regions: list[str] | None,
@@ -1368,7 +1394,6 @@ def reset_main_page_on_query_change(
     _specs: list[str] | None,
     _rating_ranges: list[list[Any]] | None,
     _page_size: int | None,
-    _sort_by: list[dict] | None,
 ) -> int:
     return 0
 
@@ -1379,20 +1404,16 @@ def reset_main_page_on_query_change(
     Input("summary-region-filter", "value"),
     Input("summary-class-filter", "value"),
     Input("summary-spec-filter", "value"),
-    Input("summary-column-filter", "value"),
     Input({"type": "summary-range-range", "column": ALL}, "value"),
     Input("summary-page-size", "value"),
-    Input("summary-table", "sort_by"),
 )
 def reset_summary_page_on_query_change(
     _modes: list[str] | None,
     _regions: list[str] | None,
     _classes: list[str] | None,
     _specs: list[str] | None,
-    _columns: list[str] | None,
     _ranges: list[list[Any]] | None,
     _page_size: int | None,
-    _sort_by: list[dict] | None,
 ) -> int:
     return 0
 
@@ -1470,7 +1491,7 @@ def update_summary_rows(
     refresh_application_data_if_changed()
     visible_ids = summary_visible_column_ids(optional_columns)
     visible_columns = summary_visible_columns(optional_columns)
-    df = make_summary(modes, regions)
+    df = make_summary_cached(modes, regions)
     df = apply_string_filters(df, {"class_name": classes, "spec_name": specs})
     df = apply_numeric_ranges(df, SUMMARY_NUMERIC_COLUMNS, range_values, SUMMARY_RANGE_BOUNDS)
     visible_sort_by = [
