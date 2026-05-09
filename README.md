@@ -57,22 +57,43 @@ The dashboard uses server-side filtering, sorting, and pagination so the browser
 - player table with global sorting, multi-select string filters, rating range filters, and 10/20/50/100 page sizes
 - spec summary table by game mode and region with Blizzard class/spec icons, fixed core columns, optional extra stat columns, rating bands, 1800+ stats, 1800+ lift, and mode-specific P80 lift
 
-## Heroku
+## Free Internet Deployment
 
-The app supports Heroku Postgres through `DATABASE_URL`. This is required for daily refreshes on Heroku because dyno filesystems are ephemeral.
+Recommended free setup:
 
-```powershell
-heroku git:remote -a wowpvp
-heroku addons:create heroku-postgresql:essential-0 -a wowpvp
-heroku config:set BLIZZARD_CLIENT_ID=... BLIZZARD_CLIENT_SECRET=... -a wowpvp
-git push heroku master
-heroku ps:scale web=1 clock=1 -a wowpvp
+- Render Free Web Service runs the Dash app.
+- Supabase Free Postgres stores the latest dataset through `DATABASE_URL`.
+- GitHub Actions runs the daily refresh and rewrites the database.
+
+### Supabase
+
+Create a Supabase project and copy the Postgres connection string. Use a connection string with SSL, for example:
+
+```env
+DATABASE_URL=postgresql://user:password@host:5432/postgres?sslmode=require
 ```
 
-The `clock` dyno runs `scheduler.py`, which executes:
+### GitHub Secrets
 
-```powershell
-python main.py --force --reset-data --skip-icons --skip-csv
-```
+Add these repository secrets in GitHub:
 
-once every 24 hours by default. Change the interval with `WOWPVP_REFRESH_INTERVAL_HOURS`.
+- `BLIZZARD_CLIENT_ID`
+- `BLIZZARD_CLIENT_SECRET`
+- `DATABASE_URL`
+
+The workflow in `.github/workflows/refresh-data.yml` can be started manually with `workflow_dispatch` and also runs daily at 08:00 UTC.
+
+### Render
+
+Create a new Render Blueprint from this repository. `render.yaml` defines a free Python web service with:
+
+- build command: `pip install -r requirements.txt`
+- start command: `gunicorn app:server --workers 1 --threads 4 --timeout 120`
+
+Set these Render environment variables:
+
+- `BLIZZARD_CLIENT_ID`
+- `BLIZZARD_CLIENT_SECRET`
+- `DATABASE_URL`
+
+The Render web service reads the current dataset from Supabase. If the database has not been populated yet, run the GitHub workflow once manually.

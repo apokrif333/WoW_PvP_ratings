@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: wowpvp
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:server --workers 1 --threads 4 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.13
+      - key: BLIZZARD_CLIENT_ID
+        sync: false
+      - key: BLIZZARD_CLIENT_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
