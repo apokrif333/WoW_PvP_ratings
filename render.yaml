@@ -4,10 +4,16 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:server --workers 1 --threads 4 --timeout 120
+    startCommand: gunicorn app:server --workers 1 --threads 2 --timeout 120 --max-requests 500 --max-requests-jitter 50
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.13
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: BLIZZARD_CLIENT_ID
         sync: false
       - key: BLIZZARD_CLIENT_SECRET

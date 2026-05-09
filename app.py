@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from math import ceil
 from pathlib import Path
 from textwrap import dedent
@@ -48,6 +49,8 @@ MAIN_TABLE_COLUMNS = [
 ]
 MAIN_TABLE_COLUMN_IDS = [column["id"] for column in MAIN_TABLE_COLUMNS]
 MAIN_STRING_COLUMNS = ["region", "character_name", "realm", "class_name", "spec_name"]
+APP_DATA_COLUMNS = [*MAIN_STRING_COLUMNS, *RATING_COLUMNS]
+APP_CATEGORY_COLUMNS = ["region", "realm", "class_name", "spec_name"]
 
 SUMMARY_FIXED_COLUMN_IDS = [
     "spec_name",
@@ -213,17 +216,26 @@ SUMMARY_STYLE_CELL_CONDITIONAL = [
 
 
 def load_data() -> pd.DataFrame:
-    df = read_processed_players(DATA_PATH)
+    df = read_processed_players(DATA_PATH, columns=APP_DATA_COLUMNS)
     if df.empty:
-        return df
+        return pd.DataFrame(columns=APP_DATA_COLUMNS)
+
+    for column in APP_DATA_COLUMNS:
+        if column not in df.columns:
+            df[column] = 0 if column in RATING_COLUMNS else ""
+    df = df[APP_DATA_COLUMNS]
 
     for column in RATING_COLUMNS:
-        if column in df.columns:
-            df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
-    for column in ("region", "character_name", "realm", "class_name", "spec_name"):
-        if column in df.columns:
-            df[column] = df[column].fillna("").astype(str)
-    return df.fillna("")
+        df[column] = (
+            pd.to_numeric(df[column], errors="coerce")
+            .fillna(0)
+            .clip(lower=0, upper=65535)
+            .astype("uint16")
+        )
+    for column in APP_CATEGORY_COLUMNS:
+        df[column] = df[column].fillna("").astype(str).astype("category")
+    df["character_name"] = df["character_name"].fillna("").astype("string")
+    return df
 
 
 def make_options(values: pd.Series) -> list[dict[str, str]]:
@@ -403,6 +415,36 @@ def make_range_bounds(df: pd.DataFrame, columns: list[str]) -> dict[str, dict[st
                     maximum = int(maximum)
         if minimum == maximum:
             maximum = minimum + range_step(column)
+        bounds[column] = {"min": minimum, "max": maximum, "step": range_step(column)}
+    return bounds
+
+
+def make_summary_range_bounds(df: pd.DataFrame) -> dict[str, dict[str, float | int]]:
+    max_rating = 3000
+    if not df.empty:
+        for column in RATING_COLUMNS:
+            if column not in df.columns:
+                continue
+            column_max = pd.to_numeric(df[column], errors="coerce").max()
+            if not pd.isna(column_max):
+                max_rating = max(max_rating, int(column_max))
+
+    max_players = max(1, int(len(df)))
+    bounds: dict[str, dict[str, float | int]] = {}
+    for column in SUMMARY_NUMERIC_COLUMNS:
+        if column.startswith("pct_") or column.endswith("_share") or "_share_" in column:
+            minimum: float | int = 0
+            maximum: float | int = 1
+        elif column.startswith("lift_"):
+            minimum = 0
+            maximum = 5
+        elif column.startswith(("mean_", "median_", "q")):
+            minimum = 0
+            maximum = max_rating
+        else:
+            minimum = 0
+            maximum = max_players
+
         bounds[column] = {"min": minimum, "max": maximum, "step": range_step(column)}
     return bounds
 
@@ -787,8 +829,7 @@ def make_summary(modes: list[str] | None, region_filters: list[str] | None) -> p
     return pd.concat(frames, ignore_index=True)
 
 
-DATA = pd.DataFrame()
-SUMMARY_ALL_DATA = pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
+DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
 MAIN_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
 SUMMARY_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
 DATA_VERSION: str | None = None
@@ -796,14 +837,16 @@ DATA_LAST_CHECK = 0.0
 
 
 def reload_application_data() -> None:
-    global DATA, SUMMARY_ALL_DATA, MAIN_RANGE_BOUNDS, SUMMARY_RANGE_BOUNDS, DATA_VERSION
+    global DATA, MAIN_RANGE_BOUNDS, SUMMARY_RANGE_BOUNDS, DATA_VERSION
 
+    DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
+    gc.collect()
     DATA = load_data()
-    SUMMARY_ALL_DATA = make_summary(None, None) if not DATA.empty else pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
     MAIN_RANGE_BOUNDS = make_range_bounds(DATA, RATING_COLUMNS)
-    SUMMARY_RANGE_BOUNDS = make_range_bounds(SUMMARY_ALL_DATA, SUMMARY_NUMERIC_COLUMNS)
+    SUMMARY_RANGE_BOUNDS = make_summary_range_bounds(DATA)
     DATA_VERSION = dataset_version(DATA_PATH)
     SUMMARY_COLUMN_TOOLTIPS["lift_p80_plus"] = make_p80_lift_tooltip()
+    gc.collect()
 
 
 def refresh_application_data_if_changed(force: bool = False) -> None:
@@ -821,7 +864,7 @@ def refresh_application_data_if_changed(force: bool = False) -> None:
 
 reload_application_data()
 
-app = Dash(__name__, title="WoW PvP Data")
+app = Dash(__name__, title="WoW PvP Data", suppress_callback_exceptions=True)
 server = app.server
 
 
@@ -1380,7 +1423,7 @@ def filter_main_rows(
     sort_by: list[dict] | None,
 ) -> tuple[list[dict], int, str]:
     refresh_application_data_if_changed()
-    df = DATA.copy()
+    df = DATA
     df = apply_string_filters(
         df,
         {

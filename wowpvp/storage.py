@@ -119,20 +119,28 @@ def write_players_to_database(df: pd.DataFrame) -> None:
             )
 
 
-def read_players_from_database() -> pd.DataFrame:
+def _select_player_columns(columns: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    if not columns:
+        return PLAYER_COLUMNS
+    selected = [column for column in columns if column in PLAYER_COLUMNS]
+    return selected or PLAYER_COLUMNS
+
+
+def read_players_from_database(columns: list[str] | tuple[str, ...] | None = None) -> pd.DataFrame:
+    selected_columns = _select_player_columns(columns)
     if not has_database_store():
-        return pd.DataFrame(columns=PLAYER_COLUMNS)
+        return pd.DataFrame(columns=selected_columns)
 
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT {', '.join(PLAYER_COLUMNS)} FROM pvp_players")
+                cur.execute(f"SELECT {', '.join(selected_columns)} FROM pvp_players")
                 rows = cur.fetchall()
     except Exception as exc:
         print(f"Postgres dataset is not available yet: {exc}")
-        return pd.DataFrame(columns=PLAYER_COLUMNS)
+        return pd.DataFrame(columns=selected_columns)
 
-    return pd.DataFrame(rows, columns=PLAYER_COLUMNS)
+    return pd.DataFrame(rows, columns=selected_columns)
 
 
 def database_dataset_version() -> str | None:
@@ -163,12 +171,16 @@ def dataset_version(path: Path) -> str | None:
     return database_dataset_version() if has_database_store() else local_dataset_version(path)
 
 
-def read_processed_players(path: Path) -> pd.DataFrame:
+def read_processed_players(
+    path: Path,
+    columns: list[str] | tuple[str, ...] | None = None,
+) -> pd.DataFrame:
+    selected_columns = _select_player_columns(columns)
     if has_database_store():
-        df = read_players_from_database()
+        df = read_players_from_database(selected_columns)
         if not df.empty:
             return df
 
     if not path.exists():
-        return pd.DataFrame(columns=PLAYER_COLUMNS)
-    return pd.read_parquet(path)
+        return pd.DataFrame(columns=selected_columns)
+    return pd.read_parquet(path, columns=selected_columns)
