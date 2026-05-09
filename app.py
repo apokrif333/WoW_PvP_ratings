@@ -184,24 +184,24 @@ TABLE_STYLE_CELL = {
     "fontFamily": "Segoe UI, Arial, sans-serif",
     "fontSize": "13px",
     "padding": "8px 10px",
-    "border": "1px solid #1b2734",
-    "backgroundColor": "#071018",
-    "color": "#f3f6fb",
+    "border": "1px solid #d8dee8",
+    "backgroundColor": "#ffffff",
+    "color": "#111827",
     "minWidth": "84px",
     "maxWidth": "220px",
     "overflow": "hidden",
     "textOverflow": "ellipsis",
 }
 TABLE_STYLE_HEADER = {
-    "backgroundColor": "#19232f",
-    "color": "#ffffff",
+    "backgroundColor": "#eef3f8",
+    "color": "#0f172a",
     "fontWeight": "700",
-    "border": "1px solid #324050",
+    "border": "1px solid #cbd5e1",
 }
 TABLE_STYLE_DATA_CONDITIONAL = [
-    {"if": {"row_index": "odd"}, "backgroundColor": "#0b1621"},
-    {"if": {"state": "active"}, "backgroundColor": "#18283a", "border": "1px solid #ff9d00"},
-    {"if": {"filter_query": "{rating_3v3} >= 2400"}, "backgroundColor": "#10243a"},
+    {"if": {"row_index": "odd"}, "backgroundColor": "#f8fafc"},
+    {"if": {"state": "active"}, "backgroundColor": "#fff7ed", "border": "1px solid #ea580c"},
+    {"if": {"filter_query": "{rating_3v3} >= 2400"}, "backgroundColor": "#e0f2fe"},
 ]
 MAIN_STYLE_CELL_CONDITIONAL = [
     {"if": {"column_id": column}, "textAlign": "right"} for column in RATING_COLUMNS
@@ -296,6 +296,23 @@ def make_multi_filter(
                 placeholder=placeholder or label,
                 maxHeight=520,
                 optionHeight=34,
+            ),
+        ],
+    )
+
+
+def make_text_filter(component_id: str, label: str, placeholder: str | None = None) -> html.Div:
+    return html.Div(
+        className="field",
+        children=[
+            html.Label(label),
+            dcc.Input(
+                id=component_id,
+                className="text-filter",
+                type="text",
+                debounce=False,
+                placeholder=placeholder or label,
+                value="",
             ),
         ],
     )
@@ -564,6 +581,13 @@ def apply_string_filters(
             continue
         df = df[df[column].astype(str).isin(values)]
     return df
+
+
+def apply_text_contains_filter(df: pd.DataFrame, column: str, value: str | None) -> pd.DataFrame:
+    query = (value or "").strip()
+    if not query or column not in df.columns:
+        return df
+    return df[df[column].astype(str).str.casefold().str.contains(query.casefold(), regex=False)]
 
 
 def apply_table_sort(
@@ -839,10 +863,9 @@ def layout() -> html.Div:
                         make_options(DATA["region"]),
                         "All regions",
                     ),
-                    make_multi_filter(
+                    make_text_filter(
                         "character-filter",
                         "Name",
-                        [],
                         "Search name",
                     ),
                     make_multi_filter(
@@ -1000,8 +1023,8 @@ def layout() -> html.Div:
                 style_cell_conditional=SUMMARY_STYLE_CELL_CONDITIONAL,
                 style_header=TABLE_STYLE_HEADER,
                 style_data_conditional=[
-                    {"if": {"row_index": "odd"}, "backgroundColor": "#0b1621"},
-                    {"if": {"state": "active"}, "backgroundColor": "#18283a", "border": "1px solid #ff9d00"},
+                    {"if": {"row_index": "odd"}, "backgroundColor": "#f8fafc"},
+                    {"if": {"state": "active"}, "backgroundColor": "#fff7ed", "border": "1px solid #ea580c"},
                 ],
                 markdown_options={"link_target": "_self"},
             ),
@@ -1023,23 +1046,6 @@ def sync_summary_page_size(page_size: int | None) -> int:
 
 
 @app.callback(
-    Output("character-filter", "options"),
-    Input("character-filter", "search_value"),
-    State("character-filter", "value"),
-)
-def update_character_options(
-    search_value: str | None,
-    selected_values: list[str] | str | None,
-) -> list[dict[str, str]]:
-    refresh_application_data_if_changed()
-    return make_limited_options(
-        DATA["character_name"],
-        selected=selected_values,
-        search=search_value,
-    )
-
-
-@app.callback(
     Output("pvp-table", "page_current"),
     Input("region-filter", "value"),
     Input("character-filter", "value"),
@@ -1052,7 +1058,7 @@ def update_character_options(
 )
 def reset_main_page_on_query_change(
     _regions: list[str] | None,
-    _characters: list[str] | None,
+    _character_query: str | None,
     _realms: list[str] | None,
     _classes: list[str] | None,
     _specs: list[str] | None,
@@ -1103,7 +1109,7 @@ def reset_summary_page_on_query_change(
 )
 def filter_main_rows(
     regions: list[str] | None,
-    characters: list[str] | None,
+    character_query: str | None,
     realms: list[str] | None,
     classes: list[str] | None,
     specs: list[str] | None,
@@ -1118,12 +1124,12 @@ def filter_main_rows(
         df,
         {
             "region": regions,
-            "character_name": characters,
             "realm": realms,
             "class_name": classes,
             "spec_name": specs,
         },
     )
+    df = apply_text_contains_filter(df, "character_name", character_query)
     df = apply_numeric_ranges(df, RATING_COLUMNS, rating_ranges, MAIN_RANGE_BOUNDS)
     df = apply_table_sort(df, sort_by, set(RATING_COLUMNS))
     page_df, page_count = page_dataframe(df, page_current, page_size)
@@ -1199,7 +1205,7 @@ def reset_filters(
     _clicks: int,
 ) -> tuple[
     None,
-    None,
+    str,
     None,
     None,
     None,
@@ -1216,7 +1222,7 @@ def reset_filters(
     refresh_application_data_if_changed()
     return (
         None,
-        None,
+        "",
         None,
         None,
         None,
