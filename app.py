@@ -75,9 +75,31 @@ MAIN_TABLE_COLUMNS = [
 ]
 MAIN_TABLE_COLUMN_IDS = [column["id"] for column in MAIN_TABLE_COLUMNS]
 MAIN_STRING_COLUMNS = ["region", "character_name", "realm", "class_name", "spec_name"]
-APP_INTERNAL_COLUMNS = ["realm_slug"]
+APP_INTERNAL_COLUMNS = [
+    "realm_slug",
+    "shuffle_class_name",
+    "shuffle_spec_name",
+    "blitz_class_name",
+    "blitz_spec_name",
+]
 APP_DATA_COLUMNS = [*MAIN_STRING_COLUMNS, *APP_INTERNAL_COLUMNS, *RATING_COLUMNS]
-APP_CATEGORY_COLUMNS = ["region", "realm", "class_name", "spec_name"]
+APP_CATEGORY_COLUMNS = [
+    "region",
+    "realm",
+    "class_name",
+    "spec_name",
+    "shuffle_class_name",
+    "shuffle_spec_name",
+    "blitz_class_name",
+    "blitz_spec_name",
+]
+MODE_SPEC_COLUMNS = {
+    "Shuffle": ("shuffle_class_name", "shuffle_spec_name"),
+    "Blitz BG": ("blitz_class_name", "blitz_spec_name"),
+    "2v2": ("class_name", "spec_name"),
+    "3v3": ("class_name", "spec_name"),
+    "RBG": ("class_name", "spec_name"),
+}
 
 SUMMARY_FIXED_COLUMN_IDS = [
     "spec_name",
@@ -879,11 +901,23 @@ def make_p80_lift_tooltip() -> str:
     )
 
 
+def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
+    class_column, spec_column = MODE_SPEC_COLUMNS.get(mode, ("class_name", "spec_name"))
+    df = DATA[["region", "class_name", "spec_name", rating_column]].copy()
+    if class_column in DATA.columns and class_column != "class_name":
+        mode_classes = DATA[class_column].fillna("").astype(str)
+        df["class_name"] = mode_classes.where(mode_classes.ne(""), df["class_name"].astype(str))
+    if spec_column in DATA.columns and spec_column != "spec_name":
+        mode_specs = DATA[spec_column].fillna("").astype(str)
+        df["spec_name"] = mode_specs.where(mode_specs.ne(""), df["spec_name"].astype(str))
+    return df
+
+
 def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     rating_column = GAME_MODE_COLUMNS.get(mode, "shuffle_rating")
     region_label = region_filter or "Both"
 
-    df = DATA[["region", "class_name", "spec_name", rating_column]].copy()
+    df = mode_summary_source(mode, rating_column)
     if region_label != "Both":
         df = df[df["region"] == region_label.lower()]
 

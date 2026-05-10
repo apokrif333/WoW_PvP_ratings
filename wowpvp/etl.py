@@ -10,6 +10,7 @@ from wowpvp.utils import ensure_dirs, player_key, slugify_realm
 
 
 FINAL_COLUMNS = PLAYER_COLUMNS
+BLIZZARD_MODE_PREFIXES = {"shuffle": "shuffle", "blitz": "blitz"}
 
 
 def load_raw_blizzard(data_dir: Path) -> pd.DataFrame:
@@ -52,6 +53,27 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
     for column in ["shuffle_rating", "blitz_rating"]:
         if column not in result:
             result[column] = 0
+
+    mode_identities = (
+        df.sort_values(["player_key", "mode", "rating"], ascending=[True, True, False])
+        .drop_duplicates(["player_key", "mode"])
+        .loc[:, ["player_key", "mode", "class_name", "spec_name"]]
+    )
+    for mode, prefix in BLIZZARD_MODE_PREFIXES.items():
+        mode_columns = (
+            mode_identities[mode_identities["mode"].eq(mode)]
+            .drop(columns=["mode"])
+            .rename(
+                columns={
+                    "class_name": f"{prefix}_class_name",
+                    "spec_name": f"{prefix}_spec_name",
+                }
+            )
+        )
+        result = result.merge(mode_columns, on="player_key", how="left")
+        result[f"{prefix}_class_name"] = result[f"{prefix}_class_name"].fillna("")
+        result[f"{prefix}_spec_name"] = result[f"{prefix}_spec_name"].fillna("")
+
     return result
 
 
@@ -146,6 +168,15 @@ def build_final_dataset(
         final[column] = optional_series(merged, column, 0).fillna(0).astype(int)
     for column in ["rating_2v2", "rating_3v3", "rating_rbg"]:
         final[column] = optional_series(merged, column, 0).fillna(0).astype(int)
+    for prefix in BLIZZARD_MODE_PREFIXES.values():
+        final[f"{prefix}_class_name"] = first_non_empty(
+            optional_series(merged, f"{prefix}_class_name"),
+            final["class_name"],
+        )
+        final[f"{prefix}_spec_name"] = first_non_empty(
+            optional_series(merged, f"{prefix}_spec_name"),
+            final["spec_name"],
+        )
 
     final = final[FINAL_COLUMNS].sort_values(
         ["rating_3v3", "shuffle_rating", "blitz_rating", "rating_2v2", "rating_rbg"],

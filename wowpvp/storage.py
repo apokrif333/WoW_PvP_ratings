@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 
 PLAYER_COLUMNS = [
@@ -17,6 +18,10 @@ PLAYER_COLUMNS = [
     "realm_slug",
     "class_name",
     "spec_name",
+    "shuffle_class_name",
+    "shuffle_spec_name",
+    "blitz_class_name",
+    "blitz_spec_name",
     "shuffle_rating",
     "blitz_rating",
     "rating_2v2",
@@ -32,6 +37,10 @@ TEXT_COLUMNS = {
     "realm_slug",
     "class_name",
     "spec_name",
+    "shuffle_class_name",
+    "shuffle_spec_name",
+    "blitz_class_name",
+    "blitz_spec_name",
 }
 INTEGER_COLUMNS = set(PLAYER_COLUMNS) - TEXT_COLUMNS
 
@@ -134,13 +143,31 @@ def read_players_from_database(columns: list[str] | tuple[str, ...] | None = Non
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT {', '.join(selected_columns)} FROM pvp_players")
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'pvp_players'
+                    """
+                )
+                available_columns = {row[0] for row in cur.fetchall()}
+                existing_columns = [
+                    column for column in selected_columns if column in available_columns
+                ]
+                if not existing_columns:
+                    return pd.DataFrame(columns=selected_columns)
+
+                cur.execute(f"SELECT {', '.join(existing_columns)} FROM pvp_players")
                 rows = cur.fetchall()
     except Exception as exc:
         print(f"Postgres dataset is not available yet: {exc}")
         return pd.DataFrame(columns=selected_columns)
 
-    return pd.DataFrame(rows, columns=selected_columns)
+    df = pd.DataFrame(rows, columns=existing_columns)
+    for column in selected_columns:
+        if column not in df:
+            df[column] = "" if column in TEXT_COLUMNS else 0
+    return df[selected_columns]
 
 
 def database_dataset_version() -> str | None:
@@ -183,4 +210,14 @@ def read_processed_players(
 
     if not path.exists():
         return pd.DataFrame(columns=selected_columns)
-    return pd.read_parquet(path, columns=selected_columns)
+
+    available_columns = set(pq.read_schema(path).names)
+    existing_columns = [column for column in selected_columns if column in available_columns]
+    if existing_columns:
+        df = pd.read_parquet(path, columns=existing_columns)
+    else:
+        df = pd.DataFrame(index=pd.RangeIndex(0))
+    for column in selected_columns:
+        if column not in df:
+            df[column] = "" if column in TEXT_COLUMNS else 0
+    return df[selected_columns]
