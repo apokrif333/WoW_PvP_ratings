@@ -149,6 +149,19 @@ h2 {
   overflow: hidden;
 }
 
+.info-panel > summary {
+  padding: 10px 12px;
+  color: var(--accent-strong);
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid transparent;
+  font-weight: 700;
+}
+
+.info-panel[open] > summary {
+  border-bottom-color: var(--border);
+}
+
 .info-tabs-wrap {
   background: var(--panel);
 }

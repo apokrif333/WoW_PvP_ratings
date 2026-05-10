@@ -178,7 +178,7 @@ SUMMARY_COLUMN_TOOLTIPS = {
     "game_mode": "Игровой режим, по которому считается summary.",
     "region_filter": "Регион/срез: Both, EU или US.",
     "total_players": "total_players = COUNT(игроков спека после всех фильтров).",
-    "n_0_1400": "n_0_1400 = COUNT(rating >= 0 AND rating < 1400).",
+    "n_0_1400": "n_0_1400 = COUNT(rating > 0 AND rating < 1400).",
     "n_1400_1800": "n_1400_1800 = COUNT(rating >= 1400 AND rating < 1800).",
     "n_1800_2100": "n_1800_2100 = COUNT(rating >= 1800 AND rating < 2100).",
     "n_2100_plus": "n_2100_plus = COUNT(rating >= 2100).",
@@ -197,7 +197,7 @@ SUMMARY_COLUMN_TOOLTIPS = {
     "overall_spec_share": "overall_spec_share = total_players_спека / total_players_всех_спеков.",
     "spec_share_1800_plus": "spec_share_1800_plus = n_(rating>=1800)_спека / n_(rating>=1800)_всех_спеков.",
     "lift_1800_plus": "lift_1800_plus = spec_share_1800_plus / overall_spec_share.",
-    "lift_p80_plus": "lift_p80_plus = spec_share_p80_plus / active_spec_share. P80 cutoff is calculated per game mode.",
+    "lift_p80_plus": "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. P80 cutoff is calculated per game mode.",
 }
 
 FILTER_OPERATORS = [
@@ -848,7 +848,7 @@ def mode_percentile_cutoff(df: pd.DataFrame, rating_column: str) -> float | None
 def make_p80_lift_tooltip() -> str:
     if DATA.empty:
         return (
-            "lift_p80_plus = spec_share_p80_plus / active_spec_share. "
+            "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
             "P80 cutoff is calculated per game mode from active characters with rating > 0."
         )
 
@@ -860,7 +860,7 @@ def make_p80_lift_tooltip() -> str:
 
     cutoff_text = ", ".join(cutoffs) if cutoffs else "no active ratings yet"
     return (
-        "lift_p80_plus = spec_share_p80_plus / active_spec_share. "
+        "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
         "The cutoff is the 80th percentile rating among active characters "
         f"(rating > 0) in the same game mode and region. Current Both cutoffs: {cutoff_text}."
     )
@@ -875,10 +875,12 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
         df = df[df["region"] == region_label.lower()]
 
     df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
+    df = df[df[rating_column] > 0]
     total_players = len(df)
+    if not total_players:
+        return pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
+
     total_1800_plus = int((df[rating_column] >= HIGH_RATING_THRESHOLD).sum())
-    active_df = df[df[rating_column] > 0]
-    total_active_players = len(active_df)
     p80_cutoff = mode_percentile_cutoff(df, rating_column)
     total_p80_plus = int((df[rating_column] >= p80_cutoff).sum()) if p80_cutoff is not None else 0
     rows: list[dict[str, Any]] = []
@@ -886,8 +888,7 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     for (class_name, spec_name), group in df.groupby(["class_name", "spec_name"], dropna=False):
         ratings = group[rating_column]
         total = int(len(group))
-        active_total = int((ratings > 0).sum())
-        n_0_1400 = int(((ratings >= 0) & (ratings < 1400)).sum())
+        n_0_1400 = int(((ratings > 0) & (ratings < 1400)).sum())
         n_1400_1800 = int(((ratings >= 1400) & (ratings < 1800)).sum())
         n_1800_2100 = int(((ratings >= 1800) & (ratings < 2100)).sum())
         high_ratings = ratings[ratings >= HIGH_RATING_THRESHOLD]
@@ -896,7 +897,6 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
         n_p80_plus = int((ratings >= p80_cutoff).sum()) if p80_cutoff is not None else 0
 
         overall_spec_share = total / total_players if total_players else None
-        active_spec_share = active_total / total_active_players if total_active_players else None
         spec_share_1800_plus = (
             n_1800_plus / total_1800_plus if n_1800_plus and total_1800_plus else None
         )
@@ -907,8 +907,8 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
             else None
         )
         lift_p80_plus = (
-            spec_share_p80_plus / active_spec_share
-            if spec_share_p80_plus is not None and active_spec_share
+            spec_share_p80_plus / overall_spec_share
+            if spec_share_p80_plus is not None and overall_spec_share
             else None
         )
 
@@ -1214,7 +1214,7 @@ def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[h
             )
         )
 
-    apply_plot_theme(fig, f"{mode} {region_filter} rating distribution", "Rating")
+    apply_plot_theme(fig, f"{mode} {region_filter} rating distribution by median", "Rating")
     fig.update_layout(images=chart_icon_images(labels, icons))
     fig.update_xaxes(
         range=[-0.6, len(order) - 0.4],
@@ -1340,7 +1340,7 @@ PLAYER_TABLE_GUIDE_EN = dedent(
 
     **How to interpret values**
 
-    `0` does not always mean a weak character. In this dataset it usually means **no detected participation in that mode**. A character can have `2600` in Shuffle and `0` in 3v3 because they do not play 3v3 or because check-pvp did not return a rating for that mode.
+    `0` does not always mean a weak character. In this dataset it usually means **no detected participation in that mode**. The summary table and charts ignore these `0` values for the selected mode, so mode-level statistics describe active participants only.
 
     **Useful questions this table can answer**
 
@@ -1430,7 +1430,7 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     """
     ### Spec Summary: what the second table shows
 
-    The summary table aggregates characters by **Class + Spec + Game Mode + Region**. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears among stronger players**.
+    The summary table aggregates active characters by **Class + Spec + Game Mode + Region**. Active means the character has `rating > 0` in the selected mode. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears among stronger players**.
 
     **How to use it**
 
@@ -1445,7 +1445,7 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     - `Spec`, `Class` - specialization and class used for aggregation.
     - `Game Mode` - the mode whose rating is being analyzed.
     - `Region` - Both, EU, or US.
-    - `Total Players` - number of characters of that spec in the selected mode/region.
+    - `Total Players` - number of active characters of that spec in the selected mode/region.
     - `n_0_1400`, `n_1400_1800`, `n_1800_2100`, `n_2100_plus` - counts of spec players in each rating band.
 
     **Percentage columns**
@@ -1496,13 +1496,47 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
 ).strip()
 
 
-def make_info_tabs(component_id: str, russian_text: str, english_text: str) -> html.Div:
-    return html.Div(
+CHARTS_GUIDE_EN = dedent(
+    """
+    ### Charts: how to read them
+
+    The first chart ranks specs from the highest lift to the lowest for one game mode and region. `Lift P80+ = 1.89` for Discipline Priest in Shuffle means this spec appears in the top 20% of active Shuffle ratings about **1.89 times more often** than its overall active population share would predict. In plain language: Discipline Priest is overrepresented among high-rated Shuffle characters. That can mean the spec is strong, efficient, easier to convert into rating, popular among stronger players, or a mix of those things. It is a signal, not proof of balance by itself.
+
+    `Lift 1800+` uses a fixed 1800 rating cutoff. `Lift P80+` uses the top 20% cutoff for the selected mode, which is usually fairer when different modes have different rating inflation.
+
+    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. The thin tails can extend slightly beyond the observed minimum or maximum because the violin is a smoothed estimate of the distribution, not a raw bar chart.
+    """
+).strip()
+
+
+CHARTS_GUIDE_RU = dedent(
+    """
+    ### Графики: как их читать
+
+    Первый график ранжирует спеки от самого высокого lift к самому низкому для выбранного режима и региона. Если у Discipline Priest в Shuffle `Lift P80+ = 1.89`, это значит, что этот спек встречается в верхних 20% активных Shuffle-рейтингов примерно в **1.89 раза чаще**, чем ожидалось бы по его обычной доле среди активных игроков. Проще: Discipline Priest заметно чаще доходит до высоких рейтингов. Это может говорить о силе спека, эффективности, более лёгком наборе рейтинга, популярности среди сильных игроков или сочетании этих причин. Сам по себе lift не доказывает баланс, но даёт хороший сигнал.
+
+    `Lift 1800+` использует фиксированный порог 1800 рейтинга. `Lift P80+` использует верхние 20% выбранного режима, поэтому он обычно честнее для сравнения режимов с разной инфляцией рейтинга.
+
+    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Тонкие хвосты могут немного выходить выше или ниже реального минимума/максимума выборки, потому что violin - это сглаженная оценка распределения, а не сырые столбики.
+    """
+).strip()
+
+
+def make_info_tabs(
+    component_id: str,
+    russian_text: str,
+    english_text: str,
+    summary: str = "Description",
+    open_panel: bool = True,
+) -> html.Details:
+    return html.Details(
         className="info-panel",
+        open=open_panel,
         children=[
+            html.Summary(summary),
             dcc.Tabs(
                 id=f"{component_id}-tabs",
-                value="ru",
+                value="en",
                 className="info-tabs",
                 parent_className="info-tabs-wrap",
                 children=[
@@ -1551,6 +1585,12 @@ def make_charts_page() -> html.Div:
                         ],
                     ),
                 ],
+            ),
+            make_info_tabs(
+                "charts-guide",
+                CHARTS_GUIDE_RU,
+                CHARTS_GUIDE_EN,
+                "Charts description",
             ),
             html.Div(
                 className="chart-card",
@@ -1669,6 +1709,7 @@ def layout() -> html.Div:
                                     "player-table-guide",
                                     PLAYER_TABLE_GUIDE_RU,
                                     PLAYER_TABLE_GUIDE_EN,
+                                    "Player table description",
                                 ),
                                 html.Div(
                                     className="filters main-filters",
@@ -1758,7 +1799,12 @@ def layout() -> html.Div:
                     ),
                 ],
             ),
-            make_info_tabs("summary-table-guide", SUMMARY_TABLE_GUIDE_RU, SUMMARY_TABLE_GUIDE_EN),
+            make_info_tabs(
+                "summary-table-guide",
+                SUMMARY_TABLE_GUIDE_RU,
+                SUMMARY_TABLE_GUIDE_EN,
+                "Spec summary description",
+            ),
             html.Div(
                 className="filters summary-filters",
                 children=[
