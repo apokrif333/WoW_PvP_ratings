@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+from decimal import Decimal, ROUND_HALF_UP
 from math import ceil
 from pathlib import Path
 from textwrap import dedent
@@ -836,6 +837,18 @@ def make_mean(series: pd.Series) -> float | None:
     return round(float(series.mean()), 2)
 
 
+def make_ratio(numerator: int | float, denominator: int | float, digits: int = 4) -> float | None:
+    if not denominator:
+        return None
+    quantizer = Decimal("1").scaleb(-digits)
+    return float(
+        (Decimal(str(numerator)) / Decimal(str(denominator))).quantize(
+            quantizer,
+            rounding=ROUND_HALF_UP,
+        )
+    )
+
+
 def active_mode_ratings(df: pd.DataFrame, rating_column: str) -> pd.Series:
     ratings = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
     return ratings[ratings > 0]
@@ -898,9 +911,9 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
 
         overall_spec_share = total / total_players if total_players else None
         spec_share_1800_plus = (
-            n_1800_plus / total_1800_plus if n_1800_plus and total_1800_plus else None
+            n_1800_plus / total_1800_plus if total_1800_plus else None
         )
-        spec_share_p80_plus = n_p80_plus / total_p80_plus if n_p80_plus and total_p80_plus else None
+        spec_share_p80_plus = n_p80_plus / total_p80_plus if total_p80_plus else None
         lift_1800_plus = (
             spec_share_1800_plus / overall_spec_share
             if spec_share_1800_plus is not None and overall_spec_share
@@ -923,10 +936,10 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
                 "n_1400_1800": n_1400_1800,
                 "n_1800_2100": n_1800_2100,
                 "n_2100_plus": n_true_2100_plus,
-                "pct_0_1400": round(n_0_1400 / total, 4) if total else None,
-                "pct_1400_1800": round(n_1400_1800 / total, 4) if total else None,
-                "pct_1800_2100": round(n_1800_2100 / total, 4) if total else None,
-                "pct_2100_plus": round(n_true_2100_plus / total, 4) if total else None,
+                "pct_0_1400": make_ratio(n_0_1400, total, 4),
+                "pct_1400_1800": make_ratio(n_1400_1800, total, 4),
+                "pct_1800_2100": make_ratio(n_1800_2100, total, 4),
+                "pct_2100_plus": make_ratio(n_true_2100_plus, total, 4),
                 "mean_rating_all": make_mean(ratings),
                 "median_rating_all": make_quantile(ratings, 0.5),
                 "q20_rating_all": make_quantile(ratings, 0.2),
@@ -935,9 +948,11 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
                 "median_rating_1800_plus": make_quantile(high_ratings, 0.5),
                 "q20_rating_1800_plus": make_quantile(high_ratings, 0.2),
                 "q80_rating_1800_plus": make_quantile(high_ratings, 0.8),
-                "overall_spec_share": round(overall_spec_share, 6) if overall_spec_share else None,
+                "overall_spec_share": make_ratio(total, total_players, 6),
                 "spec_share_1800_plus": (
-                    round(spec_share_1800_plus, 6) if spec_share_1800_plus is not None else None
+                    make_ratio(n_1800_plus, total_1800_plus, 6)
+                    if total_1800_plus
+                    else None
                 ),
                 "lift_1800_plus": round(lift_1800_plus, 4) if lift_1800_plus is not None else None,
                 "lift_p80_plus": round(lift_p80_plus, 4) if lift_p80_plus is not None else None,
