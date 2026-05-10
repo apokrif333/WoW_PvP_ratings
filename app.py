@@ -6,14 +6,17 @@ from pathlib import Path
 from textwrap import dedent
 from time import monotonic
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 from dash import ALL, Dash, Input, Output, State, dash_table, dcc, html
 from dash.dash_table import FormatTemplate
 from dash.dash_table.Format import Format, Scheme
+import plotly.graph_objects as go
 
 from wowpvp.icons import icon_slug
 from wowpvp.storage import dataset_version, read_processed_players
+from wowpvp.utils import slugify_realm
 
 
 DATA_PATH = Path("data/processed/pvp_players.parquet")
@@ -35,13 +38,34 @@ INTEGER_FORMAT = Format(precision=0, scheme=Scheme.fixed)
 RATING_FORMAT = Format(precision=1, scheme=Scheme.fixed)
 LIFT_FORMAT = Format(precision=2, scheme=Scheme.fixed)
 PERCENT_FORMAT = FormatTemplate.percentage(2)
+BLIZZARD_LOCALES = {"eu": "en-gb", "us": "en-us"}
+CLASS_COLORS = {
+    "Death Knight": "#C41E3A",
+    "Demon Hunter": "#A330C9",
+    "Druid": "#FF7C0A",
+    "Evoker": "#33937F",
+    "Hunter": "#AAD372",
+    "Mage": "#3FC7EB",
+    "Monk": "#00FF98",
+    "Paladin": "#F48CBA",
+    "Priest": "#F5F5F5",
+    "Rogue": "#FFF468",
+    "Shaman": "#0070DD",
+    "Warlock": "#8788EE",
+    "Warrior": "#C69B6D",
+}
+PLOT_BACKGROUND = "#1a0d08"
+PLOT_PANEL = "#2b2018"
+PLOT_GRID = "#6f4b14"
+PLOT_GOLD = "#f6c44f"
+PLOT_YELLOW = "#ffe680"
 
 MAIN_TABLE_COLUMNS = [
     {"name": "Region", "id": "region"},
-    {"name": "Name", "id": "character_name"},
+    {"name": "Name", "id": "character_name", "presentation": "markdown"},
     {"name": "Realm", "id": "realm"},
-    {"name": "Class", "id": "class_name"},
-    {"name": "Spec", "id": "spec_name"},
+    {"name": "Class", "id": "class_name", "presentation": "markdown"},
+    {"name": "Spec", "id": "spec_name", "presentation": "markdown"},
     {"name": "Shuffle", "id": "shuffle_rating", "type": "numeric", "format": INTEGER_FORMAT},
     {"name": "Blitz BG", "id": "blitz_rating", "type": "numeric", "format": INTEGER_FORMAT},
     {"name": "2v2", "id": "rating_2v2", "type": "numeric", "format": INTEGER_FORMAT},
@@ -50,7 +74,8 @@ MAIN_TABLE_COLUMNS = [
 ]
 MAIN_TABLE_COLUMN_IDS = [column["id"] for column in MAIN_TABLE_COLUMNS]
 MAIN_STRING_COLUMNS = ["region", "character_name", "realm", "class_name", "spec_name"]
-APP_DATA_COLUMNS = [*MAIN_STRING_COLUMNS, *RATING_COLUMNS]
+APP_INTERNAL_COLUMNS = ["realm_slug"]
+APP_DATA_COLUMNS = [*MAIN_STRING_COLUMNS, *APP_INTERNAL_COLUMNS, *RATING_COLUMNS]
 APP_CATEGORY_COLUMNS = ["region", "realm", "class_name", "spec_name"]
 
 SUMMARY_FIXED_COLUMN_IDS = [
@@ -189,24 +214,24 @@ TABLE_STYLE_CELL = {
     "fontFamily": "Segoe UI, Arial, sans-serif",
     "fontSize": "13px",
     "padding": "8px 10px",
-    "border": "1px solid #d8dee8",
-    "backgroundColor": "#ffffff",
-    "color": "#111827",
+    "border": "1px solid #c58a08",
+    "backgroundColor": "#2b2018",
+    "color": "#ffe680",
     "minWidth": "84px",
     "maxWidth": "220px",
     "overflow": "hidden",
     "textOverflow": "ellipsis",
 }
 TABLE_STYLE_HEADER = {
-    "backgroundColor": "#eef3f8",
-    "color": "#0f172a",
+    "backgroundColor": "#3a2714",
+    "color": "#f0b400",
     "fontWeight": "700",
-    "border": "1px solid #cbd5e1",
+    "border": "1px solid #f0b400",
 }
 TABLE_STYLE_DATA_CONDITIONAL = [
-    {"if": {"row_index": "odd"}, "backgroundColor": "#f8fafc"},
-    {"if": {"state": "active"}, "backgroundColor": "#fff7ed", "border": "1px solid #ea580c"},
-    {"if": {"filter_query": "{rating_3v3} >= 2400"}, "backgroundColor": "#e0f2fe"},
+    {"if": {"row_index": "odd"}, "backgroundColor": "#34271d"},
+    {"if": {"state": "active"}, "backgroundColor": "#493516", "border": "1px solid #ffd75a"},
+    {"if": {"filter_query": "{rating_3v3} >= 2400"}, "backgroundColor": "#403019"},
 ]
 MAIN_STYLE_CELL_CONDITIONAL = [
     {"if": {"column_id": column}, "textAlign": "right"} for column in RATING_COLUMNS
@@ -235,6 +260,8 @@ def load_data() -> pd.DataFrame:
         )
     for column in APP_CATEGORY_COLUMNS:
         df[column] = df[column].fillna("").astype(str).astype("category")
+    for column in APP_INTERNAL_COLUMNS:
+        df[column] = df[column].fillna("").astype(str)
     df["character_name"] = df["character_name"].fillna("").astype("string")
     return df
 
@@ -286,8 +313,57 @@ def make_limited_options(
     return [{"label": value, "value": value} for value in limited_values]
 
 
+def markdown_escape(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("|", "\\|")
+    )
+
+
 def icon_markdown(kind: str, filename: str, label: str) -> str:
-    return f"![{label}](/assets/icons/{kind}/{filename}.jpg) {label}"
+    label = str(label or "")
+    filename = str(filename or "")
+    if not label or not filename:
+        return markdown_escape(label)
+    escaped_label = markdown_escape(label)
+    return f"![{escaped_label}](/assets/icons/{kind}/{filename}.jpg) {escaped_label}"
+
+
+def make_character_url(
+    region: str,
+    realm: str,
+    realm_slug: str,
+    character_name: str,
+) -> str | None:
+    region = str(region or "").strip().lower()
+    realm_slug = str(realm_slug or "").strip().lower() or slugify_realm(str(realm or ""))
+    character_name = str(character_name or "").strip()
+    if not region or not realm_slug or not character_name:
+        return None
+
+    locale = BLIZZARD_LOCALES.get(region, "en-us")
+    region_path = quote(region, safe="")
+    realm_path = quote(realm_slug, safe="-")
+    character_path = quote(character_name.lower(), safe="-")
+    return (
+        "https://worldofwarcraft.blizzard.com/"
+        f"{locale}/character/{region_path}/{realm_path}/{character_path}"
+    )
+
+
+def character_link_markdown(
+    region: str,
+    realm: str,
+    realm_slug: str,
+    character_name: str,
+) -> str:
+    label = str(character_name or "")
+    url = make_character_url(region, realm, realm_slug, label)
+    escaped_label = markdown_escape(label)
+    return f"[{escaped_label}]({url})" if url else escaped_label
 
 
 def make_multi_filter(
@@ -309,6 +385,30 @@ def make_multi_filter(
                 multi=True,
                 placeholder=placeholder or label,
                 maxHeight=520,
+                optionHeight=34,
+            ),
+        ],
+    )
+
+
+def make_single_filter(
+    component_id: str,
+    label: str,
+    options: list[dict[str, str]],
+    value: str,
+) -> html.Div:
+    return html.Div(
+        className="field",
+        children=[
+            html.Label(label),
+            dcc.Dropdown(
+                id=component_id,
+                className="dropdown-control",
+                options=options,
+                value=value,
+                clearable=False,
+                searchable=False,
+                maxHeight=260,
                 optionHeight=34,
             ),
         ],
@@ -689,6 +789,41 @@ def table_records(df: pd.DataFrame, columns: list[str]) -> list[dict]:
     return clean.to_dict("records")
 
 
+def main_table_records(df: pd.DataFrame) -> list[dict]:
+    display = df[MAIN_TABLE_COLUMN_IDS].copy()
+    if not display.empty:
+        raw_regions = df["region"].astype(str)
+        raw_realms = df["realm"].astype(str)
+        raw_realm_slugs = df["realm_slug"].astype(str) if "realm_slug" in df else raw_realms.map(slugify_realm)
+        raw_names = df["character_name"].astype(str)
+        raw_classes = df["class_name"].astype(str)
+        raw_specs = df["spec_name"].astype(str)
+
+        display["character_name"] = [
+            character_link_markdown(region, realm, realm_slug, name)
+            for region, realm, realm_slug, name in zip(
+                raw_regions,
+                raw_realms,
+                raw_realm_slugs,
+                raw_names,
+            )
+        ]
+        display["class_name"] = raw_classes.map(
+            lambda value: icon_markdown("class", icon_slug(str(value)), str(value))
+        )
+        display["spec_name"] = [
+            icon_markdown(
+                "spec",
+                f"{icon_slug(class_name)}-{icon_slug(spec_name)}",
+                spec_name,
+            )
+            for class_name, spec_name in zip(raw_classes, raw_specs)
+        ]
+
+    display = display.astype(object).where(pd.notna(display), None)
+    return display.to_dict("records")
+
+
 def make_quantile(series: pd.Series, q: float) -> float | None:
     if series.empty:
         return None
@@ -852,6 +987,244 @@ def make_summary_cached(modes: list[str] | None, region_filters: list[str] | Non
         SUMMARY_CACHE.pop(next(iter(SUMMARY_CACHE)))
     SUMMARY_CACHE[key] = summary
     return summary
+
+
+def class_color(class_name: str) -> str:
+    return CLASS_COLORS.get(str(class_name or ""), PLOT_GOLD)
+
+
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    color = hex_color.lstrip("#")
+    if len(color) != 6:
+        return f"rgba(246, 196, 79, {alpha})"
+    red = int(color[0:2], 16)
+    green = int(color[2:4], 16)
+    blue = int(color[4:6], 16)
+    return f"rgba({red}, {green}, {blue}, {alpha})"
+
+
+def spec_label(class_name: str, spec_name: str) -> str:
+    return f"{str(class_name or '').strip()} {str(spec_name or '').strip()}".strip()
+
+
+def spec_icon_src(class_name: str, spec_name: str) -> str:
+    return f"/assets/icons/spec/{icon_slug(class_name)}-{icon_slug(spec_name)}.jpg"
+
+
+def chart_icon_images(labels: list[str], sources: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "source": source,
+            "xref": "x",
+            "yref": "paper",
+            "x": index,
+            "y": -0.16,
+            "sizex": 0.72,
+            "sizey": 0.10,
+            "xanchor": "center",
+            "yanchor": "top",
+            "sizing": "contain",
+            "layer": "above",
+            "opacity": 1,
+            "name": label,
+        }
+        for index, (label, source) in enumerate(zip(labels, sources))
+    ]
+
+
+def icon_strip(labels: list[str], sources: list[str]) -> list[html.Img]:
+    return [
+        html.Img(src=source, title=label, alt=label, className="axis-icon")
+        for label, source in zip(labels, sources)
+    ]
+
+
+def apply_plot_theme(fig: go.Figure, title: str, yaxis_title: str) -> go.Figure:
+    fig.update_layout(
+        title={"text": title, "font": {"color": PLOT_GOLD, "size": 22}},
+        paper_bgcolor=PLOT_BACKGROUND,
+        plot_bgcolor=PLOT_PANEL,
+        font={"color": PLOT_YELLOW, "family": "Segoe UI, Arial, sans-serif"},
+        margin={"l": 64, "r": 24, "t": 74, "b": 112},
+        hoverlabel={"bgcolor": "#3b2a1d", "bordercolor": PLOT_GOLD, "font_color": PLOT_YELLOW},
+        xaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "tickmode": "array",
+            "tickfont": {"color": PLOT_YELLOW},
+            "linecolor": PLOT_GRID,
+        },
+        yaxis={
+            "title": {"text": yaxis_title, "font": {"color": PLOT_GOLD}},
+            "gridcolor": PLOT_GRID,
+            "zerolinecolor": PLOT_GRID,
+            "tickfont": {"color": PLOT_YELLOW},
+            "linecolor": PLOT_GRID,
+        },
+        showlegend=False,
+    )
+    return fig
+
+
+def empty_chart(title: str, message: str) -> go.Figure:
+    fig = go.Figure()
+    apply_plot_theme(fig, title, "")
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font={"color": PLOT_YELLOW, "size": 16},
+    )
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    return fig
+
+
+def prepare_lift_chart_data(mode: str, region_filter: str, lift_column: str) -> pd.DataFrame:
+    df = make_summary_cached([mode], [region_filter]).copy()
+    if df.empty or lift_column not in df:
+        return pd.DataFrame()
+    df = df[df[lift_column].notna()]
+    if df.empty:
+        return df
+    df["label"] = [
+        spec_label(class_name, spec_name)
+        for class_name, spec_name in zip(df["class_name"], df["spec_name"])
+    ]
+    df["icon_src"] = [
+        spec_icon_src(class_name, spec_name)
+        for class_name, spec_name in zip(df["class_name"], df["spec_name"])
+    ]
+    return df.sort_values(lift_column, ascending=False, kind="mergesort").reset_index(drop=True)
+
+
+def make_lift_figure(
+    mode: str,
+    region_filter: str,
+    lift_column: str,
+) -> tuple[go.Figure, list[html.Img]]:
+    lift_label = "Lift 1800+" if lift_column == "lift_1800_plus" else "Lift P80+"
+    df = prepare_lift_chart_data(mode, region_filter, lift_column)
+    if df.empty:
+        return (
+            empty_chart(f"{lift_label} by spec", "No lift data for selected filters."),
+            [],
+        )
+
+    positions = list(range(len(df)))
+    labels = df["label"].tolist()
+    icons = df["icon_src"].tolist()
+    colors = [class_color(class_name) for class_name in df["class_name"]]
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=positions,
+                y=df[lift_column],
+                marker={"color": colors, "line": {"color": "#f0b400", "width": 0.8}},
+                customdata=list(
+                    zip(
+                        df["class_name"],
+                        df["spec_name"],
+                        df["total_players"],
+                        df[lift_column],
+                    )
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                    "Total players: %{customdata[2]:,}<br>"
+                    f"{lift_label}: "
+                    "%{customdata[3]:.2f}<extra></extra>"
+                ),
+            )
+        ]
+    )
+    apply_plot_theme(fig, f"{mode} {region_filter} {lift_label}", lift_label)
+    fig.update_layout(images=chart_icon_images(labels, icons))
+    fig.update_xaxes(
+        range=[-0.6, len(df) - 0.4],
+        tickmode="array",
+        tickvals=positions,
+        ticktext=[""] * len(df),
+        title="",
+    )
+    fig.update_yaxes(rangemode="tozero")
+    return fig, icon_strip(labels, icons)
+
+
+def prepare_violin_chart_data(mode: str, region_filter: str) -> pd.DataFrame:
+    rating_column = GAME_MODE_COLUMNS.get(mode, "shuffle_rating")
+    df = DATA[["region", "class_name", "spec_name", rating_column]].copy()
+    if region_filter != "Both":
+        df = df[df["region"] == region_filter.lower()]
+    df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
+    df = df[df[rating_column] > 0]
+    return df.rename(columns={rating_column: "rating"})
+
+
+def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[html.Img]]:
+    df = prepare_violin_chart_data(mode, region_filter)
+    if df.empty:
+        return (
+            empty_chart("Rating distribution by spec", "No active ratings for selected filters."),
+            [],
+        )
+
+    order = (
+        df.groupby(["class_name", "spec_name"], observed=True)["rating"]
+        .agg(["median", "count"])
+        .reset_index()
+        .sort_values(["median", "count"], ascending=[False, False], kind="mergesort")
+    )
+    labels = [
+        spec_label(class_name, spec_name)
+        for class_name, spec_name in zip(order["class_name"], order["spec_name"])
+    ]
+    icons = [
+        spec_icon_src(class_name, spec_name)
+        for class_name, spec_name in zip(order["class_name"], order["spec_name"])
+    ]
+
+    fig = go.Figure()
+    for index, row in order.reset_index(drop=True).iterrows():
+        class_name = str(row["class_name"])
+        spec_name = str(row["spec_name"])
+        ratings = df[
+            (df["class_name"].astype(str) == class_name)
+            & (df["spec_name"].astype(str) == spec_name)
+        ]["rating"]
+        color = class_color(class_name)
+        label = spec_label(class_name, spec_name)
+        fig.add_trace(
+            go.Violin(
+                x=[index] * len(ratings),
+                y=ratings,
+                name=label,
+                width=0.78,
+                points=False,
+                box_visible=True,
+                meanline_visible=True,
+                line_color=color,
+                fillcolor=hex_to_rgba(color, 0.48),
+                opacity=0.95,
+                customdata=[label] * len(ratings),
+                hovertemplate="<b>%{customdata}</b><br>Rating: %{y}<extra></extra>",
+            )
+        )
+
+    apply_plot_theme(fig, f"{mode} {region_filter} rating distribution", "Rating")
+    fig.update_layout(images=chart_icon_images(labels, icons))
+    fig.update_xaxes(
+        range=[-0.6, len(order) - 0.4],
+        tickmode="array",
+        tickvals=list(range(len(order))),
+        ticktext=[""] * len(order),
+        title="",
+    )
+    fig.update_yaxes(rangemode="tozero")
+    return fig, icon_strip(labels, icons)
 
 
 DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
@@ -1153,6 +1526,90 @@ def make_info_tabs(component_id: str, russian_text: str, english_text: str) -> h
     )
 
 
+def make_charts_page() -> html.Div:
+    mode_options = [{"label": label, "value": label} for label in GAME_MODE_COLUMNS.keys()]
+    region_options = [
+        {"label": "Both", "value": "Both"},
+        {"label": "EU", "value": "EU"},
+        {"label": "US", "value": "US"},
+    ]
+    lift_options = [
+        {"label": "1800+", "value": "lift_1800_plus"},
+        {"label": "P80+", "value": "lift_p80_plus"},
+    ]
+    graph_config = {"displaylogo": False, "responsive": True}
+
+    return html.Div(
+        className="tab-content charts-page",
+        children=[
+            html.Div(
+                className="section-heading charts-heading",
+                children=[
+                    html.Div(
+                        children=[
+                            html.H2("Charts"),
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(
+                className="chart-card",
+                children=[
+                    html.Div(
+                        className="filters chart-filters",
+                        children=[
+                            make_single_filter(
+                                "lift-chart-mode",
+                                "Game Mode",
+                                mode_options,
+                                "Shuffle",
+                            ),
+                            make_single_filter(
+                                "lift-chart-region",
+                                "Region",
+                                region_options,
+                                "Both",
+                            ),
+                            make_single_filter(
+                                "lift-chart-type",
+                                "Lift",
+                                lift_options,
+                                "lift_1800_plus",
+                            ),
+                        ],
+                    ),
+                    dcc.Graph(id="lift-chart", className="chart-graph", config=graph_config),
+                    html.Div(id="lift-chart-icons", className="chart-axis-icons"),
+                ],
+            ),
+            html.Div(
+                className="chart-card",
+                children=[
+                    html.Div(
+                        className="filters chart-filters chart-filters-two",
+                        children=[
+                            make_single_filter(
+                                "violin-chart-mode",
+                                "Game Mode",
+                                mode_options,
+                                "Shuffle",
+                            ),
+                            make_single_filter(
+                                "violin-chart-region",
+                                "Region",
+                                region_options,
+                                "Both",
+                            ),
+                        ],
+                    ),
+                    dcc.Graph(id="violin-chart", className="chart-graph", config=graph_config),
+                    html.Div(id="violin-chart-icons", className="chart-axis-icons"),
+                ],
+            ),
+        ],
+    )
+
+
 def layout() -> html.Div:
     refresh_application_data_if_changed()
 
@@ -1172,21 +1629,50 @@ def layout() -> html.Div:
         className="page",
         children=[
             html.Div(
-                className="toolbar",
+                className="site-header",
                 children=[
-                    html.Div(
-                        children=[
-                            html.H1("WoW PvP Data"),
-                            html.Div(id="row-count", className="row-count"),
-                        ],
-                    ),
-                    html.Button("Reset", id="reset-filters", className="reset-button", n_clicks=0),
+                    html.H1("WoW PvP Data"),
                 ],
             ),
-            make_info_tabs("player-table-guide", PLAYER_TABLE_GUIDE_RU, PLAYER_TABLE_GUIDE_EN),
-            html.Div(
-                className="filters main-filters",
+            dcc.Tabs(
+                id="site-tabs",
+                value="tables",
+                className="site-tabs",
+                parent_className="site-tabs-wrap",
                 children=[
+                    dcc.Tab(
+                        label="Tables",
+                        value="tables",
+                        className="site-tab",
+                        selected_className="site-tab site-tab-selected",
+                        children=html.Div(
+                            className="tab-content tables-page",
+                            children=[
+                                html.Div(
+                                    className="toolbar",
+                                    children=[
+                                        html.Div(
+                                            children=[
+                                                html.H2("Tables"),
+                                                html.Div(id="row-count", className="row-count"),
+                                            ],
+                                        ),
+                                        html.Button(
+                                            "Reset",
+                                            id="reset-filters",
+                                            className="reset-button",
+                                            n_clicks=0,
+                                        ),
+                                    ],
+                                ),
+                                make_info_tabs(
+                                    "player-table-guide",
+                                    PLAYER_TABLE_GUIDE_RU,
+                                    PLAYER_TABLE_GUIDE_EN,
+                                ),
+                                html.Div(
+                                    className="filters main-filters",
+                                    children=[
                     make_multi_filter(
                         "region-filter",
                         "Region",
@@ -1259,6 +1745,7 @@ def layout() -> html.Div:
                 style_cell_conditional=MAIN_STYLE_CELL_CONDITIONAL,
                 style_header=TABLE_STYLE_HEADER,
                 style_data_conditional=TABLE_STYLE_DATA_CONDITIONAL,
+                markdown_options={"link_target": "_blank"},
             ),
             html.Div(
                 className="section-heading",
@@ -1354,10 +1841,26 @@ def layout() -> html.Div:
                 style_cell_conditional=SUMMARY_STYLE_CELL_CONDITIONAL,
                 style_header=TABLE_STYLE_HEADER,
                 style_data_conditional=[
-                    {"if": {"row_index": "odd"}, "backgroundColor": "#f8fafc"},
-                    {"if": {"state": "active"}, "backgroundColor": "#fff7ed", "border": "1px solid #ea580c"},
+                    {"if": {"row_index": "odd"}, "backgroundColor": "#34271d"},
+                    {
+                        "if": {"state": "active"},
+                        "backgroundColor": "#493516",
+                        "border": "1px solid #ffd75a",
+                    },
                 ],
                 markdown_options={"link_target": "_self"},
+            ),
+                            ],
+                        ),
+                    ),
+                    dcc.Tab(
+                        label="Charts",
+                        value="charts",
+                        className="site-tab",
+                        selected_className="site-tab site-tab-selected",
+                        children=make_charts_page(),
+                    ),
+                ],
             ),
         ],
     )
@@ -1459,7 +1962,7 @@ def filter_main_rows(
     df = apply_table_sort(df, sort_by, set(RATING_COLUMNS))
     page_df, page_count = page_dataframe(df, page_current, page_size)
 
-    return table_records(page_df, MAIN_TABLE_COLUMN_IDS), page_count, f"{len(df):,} rows"
+    return main_table_records(page_df), page_count, f"{len(df):,} rows"
 
 
 @app.callback(
@@ -1506,6 +2009,41 @@ def update_summary_rows(
         f"{len(df):,} specs",
         visible_columns,
     )
+
+
+@app.callback(
+    Output("lift-chart", "figure"),
+    Output("lift-chart-icons", "children"),
+    Input("lift-chart-mode", "value"),
+    Input("lift-chart-region", "value"),
+    Input("lift-chart-type", "value"),
+)
+def update_lift_chart(
+    mode: str | None,
+    region_filter: str | None,
+    lift_column: str | None,
+) -> tuple[go.Figure, list[html.Img]]:
+    refresh_application_data_if_changed()
+    mode = mode or "Shuffle"
+    region_filter = region_filter or "Both"
+    lift_column = lift_column or "lift_1800_plus"
+    return make_lift_figure(mode, region_filter, lift_column)
+
+
+@app.callback(
+    Output("violin-chart", "figure"),
+    Output("violin-chart-icons", "children"),
+    Input("violin-chart-mode", "value"),
+    Input("violin-chart-region", "value"),
+)
+def update_violin_chart(
+    mode: str | None,
+    region_filter: str | None,
+) -> tuple[go.Figure, list[html.Img]]:
+    refresh_application_data_if_changed()
+    mode = mode or "Shuffle"
+    region_filter = region_filter or "Both"
+    return make_violin_figure(mode, region_filter)
 
 
 @app.callback(

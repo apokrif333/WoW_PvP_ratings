@@ -1,18 +1,20 @@
 :root {
-  --page: #f4f7fb;
-  --panel: #ffffff;
-  --panel-soft: #f8fafc;
-  --text: #111827;
-  --muted: #475569;
-  --faint: #64748b;
-  --border: #d7dee8;
-  --border-strong: #b9c4d3;
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --accent-soft: #dbeafe;
-  --warn: #ea580c;
-  --warn-soft: #fff7ed;
-  --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  --page: #120805;
+  --page-deep: #0b0402;
+  --panel: #2b2018;
+  --panel-soft: #35281d;
+  --panel-raised: #3a2a1d;
+  --text: #ffe680;
+  --muted: #d8aa39;
+  --faint: #a87927;
+  --border: #8b5f0d;
+  --border-strong: #c58a08;
+  --accent: #f0b400;
+  --accent-strong: #ffd75a;
+  --accent-soft: #4a3519;
+  --warn: #e85818;
+  --warn-soft: #4d2413;
+  --shadow: 0 12px 34px rgba(0, 0, 0, 0.35);
 }
 
 body {
@@ -24,11 +26,49 @@ body {
 
 .page {
   min-height: 100vh;
-  padding: 18px 18px 26px;
+  padding: 0 0 28px;
   box-sizing: border-box;
-  background:
-    linear-gradient(180deg, rgba(37, 99, 235, 0.08), rgba(244, 247, 251, 0) 180px),
-    var(--page);
+  background: linear-gradient(180deg, var(--page-deep), var(--page) 180px);
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--accent);
+  background: #2a1f19;
+}
+
+.site-header h1 {
+  color: var(--accent-strong);
+}
+
+.site-tabs-wrap {
+  background: #2a1f19;
+  border-bottom: 1px solid var(--accent);
+}
+
+.site-tabs {
+  border: 0;
+}
+
+.site-tab {
+  padding: 14px 18px !important;
+  border: 0 !important;
+  border-right: 1px solid rgba(240, 180, 0, 0.28) !important;
+  background: #2a1f19 !important;
+  color: var(--accent) !important;
+  font-weight: 700 !important;
+}
+
+.site-tab-selected {
+  background: var(--accent) !important;
+  color: #1a0d08 !important;
+}
+
+.tab-content {
+  padding: 18px;
 }
 
 .toolbar {
@@ -49,7 +89,7 @@ h1,
 h2 {
   margin: 0;
   letter-spacing: 0;
-  color: var(--text);
+  color: var(--accent-strong);
 }
 
 h1 {
@@ -163,15 +203,15 @@ h2 {
 }
 
 .info-copy strong {
-  color: #0f172a;
+  color: var(--accent-strong);
 }
 
 .info-copy code {
   padding: 1px 5px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: #f1f5f9;
-  color: #0f172a;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
   font-size: 0.92em;
 }
 
@@ -196,7 +236,7 @@ input[type="number"]::placeholder {
 
 .text-filter:focus,
 input[type="number"]:focus {
-  outline: 2px solid rgba(37, 99, 235, 0.22);
+  outline: 2px solid rgba(240, 180, 0, 0.26);
   border-color: var(--accent);
 }
 
@@ -260,7 +300,7 @@ input[type="number"]:focus {
 }
 
 .range-slider-wrap .rc-slider-rail {
-  background: #dbe3ee;
+  background: #684915;
   height: 5px;
 }
 
@@ -274,16 +314,16 @@ input[type="number"]:focus {
   height: 15px;
   margin-top: -5px;
   border: 2px solid var(--accent);
-  background: #ffffff;
+  background: #21140d;
   opacity: 1;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  box-shadow: 0 0 0 2px rgba(240, 180, 0, 0.18);
 }
 
 .range-slider-wrap .rc-slider-handle:focus,
 .range-slider-wrap .rc-slider-handle:hover,
 .range-slider-wrap .rc-slider-handle-dragging {
   border-color: var(--accent-strong) !important;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.24) !important;
+  box-shadow: 0 0 0 4px rgba(240, 180, 0, 0.26) !important;
 }
 
 .range-slider-wrap .rc-slider-mark-text {
@@ -293,9 +333,9 @@ input[type="number"]:focus {
 }
 
 .range-slider-wrap .rc-slider-tooltip-inner {
-  background: var(--text);
-  color: #ffffff;
-  border: 1px solid var(--text);
+  background: #1a0d08;
+  color: var(--accent-strong);
+  border: 1px solid var(--accent);
   box-shadow: none;
 }
 
@@ -313,7 +353,7 @@ input[type="number"]:focus {
   border: 1px solid var(--accent);
   border-radius: 5px;
   background: var(--accent);
-  color: #ffffff;
+  color: #1a0d08;
   cursor: pointer;
   font-weight: 700;
 }
@@ -405,7 +445,7 @@ html body .Select-option.is-focused,
 html body .Select-option.is-selected,
 html body div[class*="-option"]:hover {
   background: var(--accent-soft) !important;
-  color: #0f172a !important;
+  color: var(--accent-strong) !important;
 }
 
 html body .Select-arrow {
@@ -418,12 +458,12 @@ html body .is-open > .Select-control .Select-arrow {
 
 html body .Select--multi .Select-value {
   background: var(--accent-soft) !important;
-  border: 1px solid #bfdbfe !important;
-  color: #1e3a8a !important;
+  border: 1px solid var(--border-strong) !important;
+  color: var(--accent-strong) !important;
 }
 
 html body .Select--multi .Select-value-icon {
-  border-right: 1px solid #bfdbfe !important;
+  border-right: 1px solid var(--border-strong) !important;
   color: var(--accent-strong) !important;
 }
 
@@ -519,7 +559,7 @@ html body .dash-options-list-virtualized {
   overflow-y: auto !important;
   overflow-x: hidden !important;
   max-height: 430px !important;
-  scrollbar-color: #94a3b8 #f1f5f9;
+  scrollbar-color: var(--border-strong) var(--panel-soft);
   scrollbar-width: thin;
 }
 
@@ -529,7 +569,7 @@ html body .dash-dropdown-option {
   padding: 0 !important;
   background: var(--panel) !important;
   color: var(--text) !important;
-  border-bottom: 1px solid #edf2f7 !important;
+  border-bottom: 1px solid rgba(197, 138, 8, 0.28) !important;
   box-shadow: none !important;
 }
 
@@ -550,7 +590,7 @@ html body .dash-options-list-option {
 html body .dash-options-list-option:hover,
 html body .dash-options-list-option.selected {
   background: var(--accent-soft) !important;
-  color: #0f172a !important;
+  color: var(--accent-strong) !important;
 }
 
 html body .dash-options-list-option-wrapper {
@@ -604,7 +644,7 @@ html body .dash-options-list-option-text {
 }
 
 .dash-table-container input {
-  background: #ffffff !important;
+  background: #21140d !important;
   color: var(--text) !important;
   border: 1px solid var(--border-strong) !important;
 }
@@ -622,7 +662,7 @@ html body .dash-options-list-option-text {
 }
 
 .dash-table-container .dash-table-tooltip {
-  background: #ffffff !important;
+  background: #21140d !important;
   color: var(--text) !important;
   border: 1px solid var(--border-strong) !important;
   border-radius: 6px !important;
@@ -657,12 +697,13 @@ html body .dash-options-list-option-text {
 .dash-table-container .dash-filter input,
 .dash-table-container .dash-filter textarea,
 .dash-table-container .dash-filter div {
-  background: #ffffff !important;
+  background: #21140d !important;
   color: var(--text) !important;
 }
 
 .dash-table-container td[data-dash-column="spec_name"] p,
-.dash-table-container td[data-dash-column="class_name"] p {
+.dash-table-container td[data-dash-column="class_name"] p,
+.dash-table-container td[data-dash-column="character_name"] p {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -679,10 +720,66 @@ html body .dash-options-list-option-text {
   vertical-align: middle;
 }
 
+.dash-table-container a {
+  color: var(--accent-strong) !important;
+  text-decoration: none;
+}
+
+.dash-table-container a:hover {
+  color: #fff4b5 !important;
+  text-decoration: underline;
+}
+
+.chart-card {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.charts-heading {
+  margin-top: 0;
+}
+
+.chart-filters {
+  grid-template-columns: minmax(170px, 240px) minmax(130px, 180px) minmax(130px, 180px);
+  align-items: end;
+}
+
+.chart-filters-two {
+  grid-template-columns: minmax(170px, 240px) minmax(130px, 180px);
+}
+
+.chart-graph {
+  min-height: 520px;
+}
+
+.chart-axis-icons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 7px 4px 0;
+  scrollbar-color: var(--border-strong) var(--panel-soft);
+  scrollbar-width: thin;
+}
+
+.axis-icon {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
 @media (max-width: 900px) {
   .filters,
   .main-filters,
   .summary-filters,
+  .chart-filters,
+  .chart-filters-two,
   .range-grid,
   .summary-range-grid {
     grid-template-columns: 1fr 1fr;
@@ -698,6 +795,8 @@ html body .dash-options-list-option-text {
   .filters,
   .main-filters,
   .summary-filters,
+  .chart-filters,
+  .chart-filters-two,
   .range-grid,
   .summary-range-grid {
     grid-template-columns: 1fr;
