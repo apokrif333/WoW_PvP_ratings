@@ -33,6 +33,7 @@ GAME_MODE_COLUMNS = {
 PAGE_SIZE_OPTIONS = [{"label": str(value), "value": value} for value in (10, 20, 50, 100)]
 MAX_DYNAMIC_OPTIONS = 500
 MAX_VIOLIN_POINTS_PER_SPEC = 900
+VIOLIN_STRATA_COUNT = 45
 HIGH_RATING_THRESHOLD = 1800
 PERCENTILE_LIFT_QUANTILE = 0.80
 INTEGER_FORMAT = Format(precision=0, scheme=Scheme.fixed)
@@ -1248,7 +1249,35 @@ def prepare_violin_chart_data(mode: str, region_filter: str) -> pd.DataFrame:
 def sample_violin_ratings(ratings: pd.Series) -> pd.Series:
     if len(ratings) <= MAX_VIOLIN_POINTS_PER_SPEC:
         return ratings
-    return ratings.sample(MAX_VIOLIN_POINTS_PER_SPEC, random_state=42)
+
+    sorted_ratings = ratings.sort_values(kind="mergesort")
+    edge_ratings = sorted_ratings.iloc[[0, -1]]
+    middle = sorted_ratings.iloc[1:-1]
+    middle_limit = MAX_VIOLIN_POINTS_PER_SPEC - len(edge_ratings)
+    if len(middle) <= middle_limit:
+        return sorted_ratings
+
+    strata_count = min(VIOLIN_STRATA_COUNT, middle_limit, len(middle))
+    stratum_ids = pd.Series(
+        range(len(middle)),
+        index=middle.index,
+        dtype="int64",
+    ).mul(strata_count).floordiv(len(middle))
+    counts = middle.groupby(stratum_ids, sort=True).size()
+    raw_quotas = counts / counts.sum() * middle_limit
+    quotas = raw_quotas.astype(int)
+    remainder = middle_limit - int(quotas.sum())
+    if remainder > 0:
+        fractional = (raw_quotas - quotas).sort_values(ascending=False, kind="mergesort")
+        for stratum_id in fractional.index[:remainder]:
+            quotas.loc[stratum_id] += 1
+
+    sampled = [
+        stratum.sample(int(quotas.loc[stratum_id]), random_state=42 + int(stratum_id))
+        for stratum_id, stratum in middle.groupby(stratum_ids, sort=True)
+        if int(quotas.loc[stratum_id]) > 0
+    ]
+    return pd.concat([edge_ratings, *sampled]).sort_values(kind="mergesort")
 
 
 def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[html.Img]]:
@@ -1590,7 +1619,7 @@ CHARTS_GUIDE_EN = dedent(
 
     `Lift 1800+` uses a fixed 1800 rating cutoff. `Lift P80+` uses the top 20% cutoff for the selected mode, which is usually fairer when different modes have different rating inflation.
 
-    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. The thin tails can extend slightly beyond the observed minimum or maximum because the violin is a smoothed estimate of the distribution, not a raw bar chart. To keep the free deployment responsive, very large specs are drawn from a stable sample, while the table metrics use the full dataset.
+    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. The thin tails can extend slightly beyond the observed minimum or maximum because the violin is a smoothed estimate of the distribution, not a raw bar chart. To keep the free deployment responsive, very large specs are drawn from a stable stratified sample across the rating distribution, while the table metrics use the full dataset.
     """
 ).strip()
 
@@ -1603,7 +1632,7 @@ CHARTS_GUIDE_RU = dedent(
 
     `Lift 1800+` использует фиксированный порог 1800 рейтинга. `Lift P80+` использует верхние 20% выбранного режима, поэтому он обычно честнее для сравнения режимов с разной инфляцией рейтинга.
 
-    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Тонкие хвосты могут немного выходить выше или ниже реального минимума/максимума выборки, потому что violin - это сглаженная оценка распределения, а не сырые столбики. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной выборке, а метрики в таблице считаются по полному датасету.
+    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Тонкие хвосты могут немного выходить выше или ниже реального минимума/максимума выборки, потому что violin - это сглаженная оценка распределения, а не сырые столбики. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной стратифицированной выборке по всему распределению рейтинга, а метрики в таблице считаются по полному датасету.
     """
 ).strip()
 
