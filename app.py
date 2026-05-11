@@ -13,7 +13,6 @@ import pandas as pd
 from dash import ALL, Dash, Input, Output, State, dash_table, dcc, html
 from dash.dash_table import FormatTemplate
 from dash.dash_table.Format import Format, Scheme
-import plotly.graph_objects as go
 
 from wowpvp.icons import icon_slug
 from wowpvp.storage import dataset_version, read_processed_players
@@ -33,6 +32,7 @@ GAME_MODE_COLUMNS = {
 }
 PAGE_SIZE_OPTIONS = [{"label": str(value), "value": value} for value in (10, 20, 50, 100)]
 MAX_DYNAMIC_OPTIONS = 500
+MAX_VIOLIN_POINTS_PER_SPEC = 900
 HIGH_RATING_THRESHOLD = 1800
 PERCENTILE_LIFT_QUANTILE = 0.80
 INTEGER_FORMAT = Format(precision=0, scheme=Scheme.fixed)
@@ -75,8 +75,8 @@ MAIN_TABLE_COLUMNS = [
 ]
 MAIN_TABLE_COLUMN_IDS = [column["id"] for column in MAIN_TABLE_COLUMNS]
 MAIN_STRING_COLUMNS = ["region", "character_name", "realm", "class_name", "spec_name"]
-APP_INTERNAL_COLUMNS = [
-    "realm_slug",
+APP_INTERNAL_COLUMNS = ["realm_slug"]
+APP_MODE_SPEC_COLUMNS = [
     "shuffle_class_name",
     "shuffle_spec_name",
     "blitz_class_name",
@@ -86,13 +86,18 @@ APP_DATA_COLUMNS = [*MAIN_STRING_COLUMNS, *APP_INTERNAL_COLUMNS, *RATING_COLUMNS
 APP_CATEGORY_COLUMNS = [
     "region",
     "realm",
+    "realm_slug",
     "class_name",
     "spec_name",
+    *APP_MODE_SPEC_COLUMNS,
+]
+APP_OPTIONAL_COLUMNS = [
     "shuffle_class_name",
     "shuffle_spec_name",
     "blitz_class_name",
     "blitz_spec_name",
 ]
+APP_DATA_COLUMNS = [*APP_DATA_COLUMNS, *APP_OPTIONAL_COLUMNS]
 MODE_SPEC_COLUMNS = {
     "Shuffle": ("shuffle_class_name", "shuffle_spec_name"),
     "Blitz BG": ("blitz_class_name", "blitz_spec_name"),
@@ -275,6 +280,8 @@ def load_data() -> pd.DataFrame:
     df = df[APP_DATA_COLUMNS]
 
     for column in RATING_COLUMNS:
+        if str(df[column].dtype) == "uint16":
+            continue
         df[column] = (
             pd.to_numeric(df[column], errors="coerce")
             .fillna(0)
@@ -282,11 +289,19 @@ def load_data() -> pd.DataFrame:
             .astype("uint16")
         )
     for column in APP_CATEGORY_COLUMNS:
-        df[column] = df[column].fillna("").astype(str).astype("category")
-    for column in APP_INTERNAL_COLUMNS:
-        df[column] = df[column].fillna("").astype(str)
-    df["character_name"] = df["character_name"].fillna("").astype("string")
+        df[column] = make_category_column(df[column])
+    df["character_name"] = make_category_column(df["character_name"])
     return df
+
+
+def make_category_column(series: pd.Series) -> pd.Series:
+    if str(series.dtype) == "category":
+        if series.isna().any():
+            if "" not in series.cat.categories:
+                series = series.cat.add_categories([""])
+            series = series.fillna("")
+        return series
+    return series.fillna("").astype(str).astype("category")
 
 
 def make_options(values: pd.Series) -> list[dict[str, str]]:
@@ -903,13 +918,26 @@ def make_p80_lift_tooltip() -> str:
 
 def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
     class_column, spec_column = MODE_SPEC_COLUMNS.get(mode, ("class_name", "spec_name"))
-    df = DATA[["region", "class_name", "spec_name", rating_column]].copy()
-    if class_column in DATA.columns and class_column != "class_name":
-        mode_classes = DATA[class_column].fillna("").astype(str)
-        df["class_name"] = mode_classes.where(mode_classes.ne(""), df["class_name"].astype(str))
-    if spec_column in DATA.columns and spec_column != "spec_name":
-        mode_specs = DATA[spec_column].fillna("").astype(str)
-        df["spec_name"] = mode_specs.where(mode_specs.ne(""), df["spec_name"].astype(str))
+    selected_class_column = class_column if class_column in DATA.columns else "class_name"
+    selected_spec_column = spec_column if spec_column in DATA.columns else "spec_name"
+    df = DATA[["region", selected_class_column, selected_spec_column, rating_column]].copy()
+    df = df.rename(
+        columns={
+            selected_class_column: "class_name",
+            selected_spec_column: "spec_name",
+        }
+    )
+    if str(df[rating_column].dtype) != "uint16":
+        df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
+    df = df[df[rating_column] > 0].copy()
+    if selected_class_column != "class_name" and df["class_name"].eq("").any():
+        mode_classes = df["class_name"].astype(str)
+        base_classes = DATA.loc[df.index, "class_name"].astype(str)
+        df["class_name"] = mode_classes.where(mode_classes.ne(""), base_classes).astype("category")
+    if selected_spec_column != "spec_name" and df["spec_name"].eq("").any():
+        mode_specs = df["spec_name"].astype(str)
+        base_specs = DATA.loc[df.index, "spec_name"].astype(str)
+        df["spec_name"] = mode_specs.where(mode_specs.ne(""), base_specs).astype("category")
     return df
 
 
@@ -921,8 +949,6 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     if region_label != "Both":
         df = df[df["region"] == region_label.lower()]
 
-    df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
-    df = df[df[rating_column] > 0]
     total_players = len(df)
     if not total_players:
         return pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
@@ -1052,6 +1078,12 @@ def hex_to_rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({red}, {green}, {blue}, {alpha})"
 
 
+def plotly_go() -> Any:
+    import plotly.graph_objects as go
+
+    return go
+
+
 def spec_label(class_name: str, spec_name: str) -> str:
     return f"{str(class_name or '').strip()} {str(spec_name or '').strip()}".strip()
 
@@ -1116,6 +1148,7 @@ def apply_plot_theme(fig: go.Figure, title: str, yaxis_title: str) -> go.Figure:
 
 
 def empty_chart(title: str, message: str) -> go.Figure:
+    go = plotly_go()
     fig = go.Figure()
     apply_plot_theme(fig, title, "")
     fig.add_annotation(
@@ -1155,6 +1188,7 @@ def make_lift_figure(
     region_filter: str,
     lift_column: str,
 ) -> tuple[go.Figure, list[html.Img]]:
+    go = plotly_go()
     lift_label = "Lift 1800+" if lift_column == "lift_1800_plus" else "Lift P80+"
     df = prepare_lift_chart_data(mode, region_filter, lift_column)
     if df.empty:
@@ -1205,15 +1239,20 @@ def make_lift_figure(
 
 def prepare_violin_chart_data(mode: str, region_filter: str) -> pd.DataFrame:
     rating_column = GAME_MODE_COLUMNS.get(mode, "shuffle_rating")
-    df = DATA[["region", "class_name", "spec_name", rating_column]].copy()
+    df = mode_summary_source(mode, rating_column)
     if region_filter != "Both":
         df = df[df["region"] == region_filter.lower()]
-    df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
-    df = df[df[rating_column] > 0]
     return df.rename(columns={rating_column: "rating"})
 
 
+def sample_violin_ratings(ratings: pd.Series) -> pd.Series:
+    if len(ratings) <= MAX_VIOLIN_POINTS_PER_SPEC:
+        return ratings
+    return ratings.sample(MAX_VIOLIN_POINTS_PER_SPEC, random_state=42)
+
+
 def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[html.Img]]:
+    go = plotly_go()
     df = prepare_violin_chart_data(mode, region_filter)
     if df.empty:
         return (
@@ -1237,13 +1276,11 @@ def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[h
     ]
 
     fig = go.Figure()
+    groups = df.groupby(["class_name", "spec_name"], observed=True)
     for index, row in order.reset_index(drop=True).iterrows():
-        class_name = str(row["class_name"])
-        spec_name = str(row["spec_name"])
-        ratings = df[
-            (df["class_name"].astype(str) == class_name)
-            & (df["spec_name"].astype(str) == spec_name)
-        ]["rating"]
+        class_name = row["class_name"]
+        spec_name = row["spec_name"]
+        ratings = sample_violin_ratings(groups.get_group((class_name, spec_name))["rating"])
         color = class_color(class_name)
         label = spec_label(class_name, spec_name)
         fig.add_trace(
@@ -1553,7 +1590,7 @@ CHARTS_GUIDE_EN = dedent(
 
     `Lift 1800+` uses a fixed 1800 rating cutoff. `Lift P80+` uses the top 20% cutoff for the selected mode, which is usually fairer when different modes have different rating inflation.
 
-    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. The thin tails can extend slightly beyond the observed minimum or maximum because the violin is a smoothed estimate of the distribution, not a raw bar chart.
+    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. The thin tails can extend slightly beyond the observed minimum or maximum because the violin is a smoothed estimate of the distribution, not a raw bar chart. To keep the free deployment responsive, very large specs are drawn from a stable sample, while the table metrics use the full dataset.
     """
 ).strip()
 
@@ -1566,7 +1603,7 @@ CHARTS_GUIDE_RU = dedent(
 
     `Lift 1800+` использует фиксированный порог 1800 рейтинга. `Lift P80+` использует верхние 20% выбранного режима, поэтому он обычно честнее для сравнения режимов с разной инфляцией рейтинга.
 
-    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Тонкие хвосты могут немного выходить выше или ниже реального минимума/максимума выборки, потому что violin - это сглаженная оценка распределения, а не сырые столбики.
+    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Тонкие хвосты могут немного выходить выше или ниже реального минимума/максимума выборки, потому что violin - это сглаженная оценка распределения, а не сырые столбики. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной выборке, а метрики в таблице считаются по полному датасету.
     """
 ).strip()
 
@@ -2109,15 +2146,19 @@ def update_summary_rows(
 @app.callback(
     Output("lift-chart", "figure"),
     Output("lift-chart-icons", "children"),
+    Input("site-tabs", "value"),
     Input("lift-chart-mode", "value"),
     Input("lift-chart-region", "value"),
     Input("lift-chart-type", "value"),
 )
 def update_lift_chart(
+    active_tab: str | None,
     mode: str | None,
     region_filter: str | None,
     lift_column: str | None,
-) -> tuple[go.Figure, list[html.Img]]:
+) -> tuple[go.Figure | dict, list[html.Img]]:
+    if active_tab != "charts":
+        return {}, []
     refresh_application_data_if_changed()
     mode = mode or "Shuffle"
     region_filter = region_filter or "Both"
@@ -2128,13 +2169,17 @@ def update_lift_chart(
 @app.callback(
     Output("violin-chart", "figure"),
     Output("violin-chart-icons", "children"),
+    Input("site-tabs", "value"),
     Input("violin-chart-mode", "value"),
     Input("violin-chart-region", "value"),
 )
 def update_violin_chart(
+    active_tab: str | None,
     mode: str | None,
     region_filter: str | None,
-) -> tuple[go.Figure, list[html.Img]]:
+) -> tuple[go.Figure | dict, list[html.Img]]:
+    if active_tab != "charts":
+        return {}, []
     refresh_application_data_if_changed()
     mode = mode or "Shuffle"
     region_filter = region_filter or "Both"

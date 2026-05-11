@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import pyarrow.parquet as pq
 
 
 PLAYER_COLUMNS = [
@@ -135,6 +134,25 @@ def _select_player_columns(columns: list[str] | tuple[str, ...] | None = None) -
     return selected or PLAYER_COLUMNS
 
 
+def _csv_read_dtypes(columns: list[str]) -> dict[str, str]:
+    return {
+        column: "category" if column in TEXT_COLUMNS else "uint16"
+        for column in columns
+    }
+
+
+def _write_copy_chunks_to_buffer(copy: Any, buffer: io.BytesIO) -> None:
+    while True:
+        chunk = copy.read()
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        elif isinstance(chunk, memoryview):
+            chunk = chunk.tobytes()
+        buffer.write(chunk)
+
+
 def read_players_from_database(columns: list[str] | tuple[str, ...] | None = None) -> pd.DataFrame:
     selected_columns = _select_player_columns(columns)
     if not has_database_store():
@@ -157,13 +175,23 @@ def read_players_from_database(columns: list[str] | tuple[str, ...] | None = Non
                 if not existing_columns:
                     return pd.DataFrame(columns=selected_columns)
 
-                cur.execute(f"SELECT {', '.join(existing_columns)} FROM pvp_players")
-                rows = cur.fetchall()
+                csv_buffer = io.BytesIO()
+                column_sql = ", ".join(existing_columns)
+                with cur.copy(
+                    f"COPY (SELECT {column_sql} FROM pvp_players) "
+                    "TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"
+                ) as copy:
+                    _write_copy_chunks_to_buffer(copy, csv_buffer)
     except Exception as exc:
         print(f"Postgres dataset is not available yet: {exc}")
         return pd.DataFrame(columns=selected_columns)
 
-    df = pd.DataFrame(rows, columns=existing_columns)
+    csv_buffer.seek(0)
+    df = pd.read_csv(
+        csv_buffer,
+        dtype=_csv_read_dtypes(existing_columns),
+        keep_default_na=False,
+    )
     for column in selected_columns:
         if column not in df:
             df[column] = "" if column in TEXT_COLUMNS else 0
@@ -210,6 +238,8 @@ def read_processed_players(
 
     if not path.exists():
         return pd.DataFrame(columns=selected_columns)
+
+    import pyarrow.parquet as pq
 
     available_columns = set(pq.read_schema(path).names)
     existing_columns = [column for column in selected_columns if column in available_columns]
