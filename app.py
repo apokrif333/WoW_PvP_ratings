@@ -896,6 +896,17 @@ def mode_percentile_cutoff(df: pd.DataFrame, rating_column: str) -> float | None
     return make_quantile(active_mode_ratings(df, rating_column), PERCENTILE_LIFT_QUANTILE)
 
 
+def blizzard_mode_rating_floor(df: pd.DataFrame, rating_column: str) -> int | None:
+    if df.empty:
+        return None
+
+    floors = df.groupby(["class_name", "spec_name"], observed=True, dropna=False)[rating_column].min()
+    floors = pd.to_numeric(floors, errors="coerce").dropna()
+    if floors.empty:
+        return None
+    return int(floors.max())
+
+
 def make_p80_lift_tooltip() -> str:
     if DATA.empty:
         return (
@@ -942,6 +953,10 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
         mode_specs = df["spec_name"].astype(str)
         base_specs = DATA.loc[df.index, "spec_name"].astype(str)
         df["spec_name"] = mode_specs.where(mode_specs.ne(""), base_specs).astype("category")
+    if mode in BLIZZARD_GAME_MODES:
+        rating_floor = blizzard_mode_rating_floor(df, rating_column)
+        if rating_floor is not None:
+            df = df[df[rating_column] >= rating_floor].copy()
     if mode not in BLIZZARD_GAME_MODES and "player_key" in df.columns:
         df = df.sort_values(["player_key", rating_column], ascending=[True, False], kind="mergesort")
         df = df.drop_duplicates("player_key", keep="first")
