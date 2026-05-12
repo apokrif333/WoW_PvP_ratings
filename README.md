@@ -37,6 +37,14 @@ Useful debug run:
 .\.venv\Scripts\python.exe main.py --regions eu --max-checkpvp-pages 2 --force
 ```
 
+Optional Blizzard profile enrichment for unknown ratings:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --skip-blizzard --skip-checkpvp --skip-icons --enrich-blizzard-profile
+```
+
+The enrichment step reads `data/processed/pvp_players.parquet`, checks Blizzard character profile PvP endpoints for rows where a mode rating is unknown, and writes the same processed parquet/CSV/database outputs. It caches profile summaries, bracket responses, and character profiles under `data/raw/blizzard_profile_*.parquet`, so interrupted runs can resume. Use `--max-enrichment-players` and `--max-enrichment-brackets` for small test runs.
+
 The final merged files are written to:
 
 - `data/processed/pvp_players.parquet`

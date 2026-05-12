@@ -68,6 +68,21 @@ class BlizzardClient:
         response.raise_for_status()
         return response.json()
 
+    def get_profile_response(self, region: str, path: str) -> requests.Response:
+        region = region.lower()
+        token = self.get_access_token(region)
+        return self.session.get(
+            f"https://{region}.api.blizzard.com/profile/wow/{path.lstrip('/')}",
+            params={"namespace": f"profile-{region}", "locale": "en_US"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=self.timeout,
+        )
+
+    def get_profile(self, region: str, path: str) -> dict[str, Any]:
+        response = self.get_profile_response(region, path)
+        response.raise_for_status()
+        return response.json()
+
     def get_current_pvp_season_id(self, region: str) -> int:
         data = self.get(region, "pvp-season/index")
         seasons = data.get("seasons", [])

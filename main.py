@@ -8,6 +8,7 @@ from pathlib import Path
 from wowpvp.blizzard import BlizzardClient, fetch_blizzard_pvp_data
 from wowpvp.checkpvp import CheckPvpClient, fetch_checkpvp_rankings
 from wowpvp.config import Settings
+from wowpvp.enrichment import enrich_processed_players
 from wowpvp.etl import build_final_dataset
 from wowpvp.icons import fetch_blizzard_icons
 from wowpvp.utils import reset_generated_data
@@ -98,6 +99,34 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not write the processed dataset to DATABASE_URL/Postgres.",
     )
+    parser.add_argument(
+        "--enrich-blizzard-profile",
+        action="store_true",
+        help="Fill unknown ratings from Blizzard character profile PvP endpoints.",
+    )
+    parser.add_argument(
+        "--force-enrichment",
+        action="store_true",
+        help="Ignore cached Blizzard profile enrichment data.",
+    )
+    parser.add_argument(
+        "--enrichment-workers",
+        type=int,
+        default=None,
+        help="Maximum parallel workers for Blizzard profile enrichment.",
+    )
+    parser.add_argument(
+        "--max-enrichment-players",
+        type=int,
+        default=None,
+        help="Debug limit for Blizzard profile PvP summary/profile requests.",
+    )
+    parser.add_argument(
+        "--max-enrichment-brackets",
+        type=int,
+        default=None,
+        help="Debug limit for Blizzard profile PvP bracket requests.",
+    )
     return parser.parse_args()
 
 
@@ -141,9 +170,20 @@ def main() -> None:
 
     output_path = build_final_dataset(
         settings.data_dir,
-        write_csv=not args.skip_csv,
-        write_database=not args.skip_database,
+        write_csv=not args.skip_csv and not args.enrich_blizzard_profile,
+        write_database=not args.skip_database and not args.enrich_blizzard_profile,
     )
+    if args.enrich_blizzard_profile:
+        output_path = enrich_processed_players(
+            client=blizzard,
+            data_dir=settings.data_dir,
+            max_workers=args.enrichment_workers or parallel_workers,
+            force=args.force_enrichment,
+            max_players=args.max_enrichment_players,
+            max_brackets=args.max_enrichment_brackets,
+            write_csv=not args.skip_csv,
+            write_database=not args.skip_database,
+        )
     print(f"Saved merged PvP dataset: {output_path}")
 
 
