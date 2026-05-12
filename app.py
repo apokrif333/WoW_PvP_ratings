@@ -30,6 +30,7 @@ GAME_MODE_COLUMNS = {
     "3v3": "rating_3v3",
     "RBG": "rating_rbg",
 }
+BLIZZARD_GAME_MODES = {"Shuffle", "Blitz BG"}
 PAGE_SIZE_OPTIONS = [{"label": str(value), "value": value} for value in (10, 20, 50, 100)]
 MAX_DYNAMIC_OPTIONS = 500
 MAX_VIOLIN_POINTS_PER_SPEC = 900
@@ -76,7 +77,7 @@ MAIN_TABLE_COLUMNS = [
 ]
 MAIN_TABLE_COLUMN_IDS = [column["id"] for column in MAIN_TABLE_COLUMNS]
 MAIN_STRING_COLUMNS = ["region", "character_name", "realm", "class_name", "spec_name"]
-APP_INTERNAL_COLUMNS = ["realm_slug"]
+APP_INTERNAL_COLUMNS = ["player_key", "realm_slug"]
 APP_MODE_SPEC_COLUMNS = [
     "shuffle_class_name",
     "shuffle_spec_name",
@@ -905,7 +906,7 @@ def make_p80_lift_tooltip() -> str:
 
     cutoffs = []
     for mode, rating_column in GAME_MODE_COLUMNS.items():
-        cutoff = mode_percentile_cutoff(DATA, rating_column)
+        cutoff = mode_percentile_cutoff(mode_summary_source(mode, rating_column), rating_column)
         if cutoff is not None:
             cutoffs.append(f"{mode} - lift cutoff {int(round(cutoff))}")
 
@@ -921,7 +922,10 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
     class_column, spec_column = MODE_SPEC_COLUMNS.get(mode, ("class_name", "spec_name"))
     selected_class_column = class_column if class_column in DATA.columns else "class_name"
     selected_spec_column = spec_column if spec_column in DATA.columns else "spec_name"
-    df = DATA[["region", selected_class_column, selected_spec_column, rating_column]].copy()
+    source_columns = ["region", selected_class_column, selected_spec_column, rating_column]
+    if "player_key" in DATA.columns:
+        source_columns.insert(0, "player_key")
+    df = DATA[source_columns].copy()
     df = df.rename(
         columns={
             selected_class_column: "class_name",
@@ -939,6 +943,9 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
         mode_specs = df["spec_name"].astype(str)
         base_specs = DATA.loc[df.index, "spec_name"].astype(str)
         df["spec_name"] = mode_specs.where(mode_specs.ne(""), base_specs).astype("category")
+    if mode not in BLIZZARD_GAME_MODES and "player_key" in df.columns:
+        df = df.sort_values(["player_key", rating_column], ascending=[True, False], kind="mergesort")
+        df = df.drop_duplicates("player_key", keep="first")
     return df
 
 

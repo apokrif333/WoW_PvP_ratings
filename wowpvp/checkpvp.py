@@ -16,6 +16,7 @@ from requests import Session
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from wowpvp.cleaning import deduplicate_checkpvp_players
 from wowpvp.utils import ensure_dirs
 
 
@@ -183,7 +184,7 @@ def fetch_region_rankings(
         if match and int(match.group(1)) > page_count:
             stale_page.unlink()
 
-    df = pd.DataFrame(rows)
+    df = deduplicate_checkpvp_players(pd.DataFrame(rows))
     df.to_parquet(raw_path, index=False)
     meta_path.write_text(
         json.dumps(

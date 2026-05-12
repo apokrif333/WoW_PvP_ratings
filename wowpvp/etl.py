@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from wowpvp.cleaning import deduplicate_checkpvp_players
 from wowpvp.constants import CLASS_ID_TO_NAME, SPEC_ID_TO_INFO
 from wowpvp.storage import PLAYER_COLUMNS, write_players_to_database
 from wowpvp.utils import ensure_dirs, player_key, slugify_realm
@@ -11,6 +12,15 @@ from wowpvp.utils import ensure_dirs, player_key, slugify_realm
 
 FINAL_COLUMNS = PLAYER_COLUMNS
 BLIZZARD_MODE_PREFIXES = {"shuffle": "shuffle", "blitz": "blitz"}
+BLIZZARD_IDENTITY_COLUMNS = [
+    "player_key",
+    "region",
+    "character_name",
+    "realm",
+    "realm_slug",
+    "class_name",
+    "spec_name",
+]
 
 
 def load_raw_blizzard(data_dir: Path) -> pd.DataFrame:
@@ -31,9 +41,21 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=FINAL_COLUMNS)
 
+    df = df.copy()
+    df["rating"] = pd.to_numeric(df["rating"], errors="coerce").fillna(0).astype(int)
+    df = (
+        df.sort_values(
+            ["player_key", "mode", "class_name", "spec_name", "rating"],
+            ascending=[True, True, True, True, False],
+            kind="mergesort",
+        )
+        .drop_duplicates(["player_key", "mode", "class_name", "spec_name"], keep="first")
+        .reset_index(drop=True)
+    )
+
     ratings = (
         df.pivot_table(
-            index="player_key",
+            index=BLIZZARD_IDENTITY_COLUMNS,
             columns="mode",
             values="rating",
             aggfunc="max",
@@ -43,36 +65,16 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    identities = (
-        df.sort_values(["player_key", "rating"], ascending=[True, False])
-        .drop_duplicates("player_key")
-        .loc[:, ["player_key", "region", "character_name", "realm", "realm_slug", "class_name", "spec_name"]]
-    )
-
-    result = identities.merge(ratings, on="player_key", how="left")
+    result = ratings
     for column in ["shuffle_rating", "blitz_rating"]:
         if column not in result:
             result[column] = 0
 
-    mode_identities = (
-        df.sort_values(["player_key", "mode", "rating"], ascending=[True, True, False])
-        .drop_duplicates(["player_key", "mode"])
-        .loc[:, ["player_key", "mode", "class_name", "spec_name"]]
-    )
     for mode, prefix in BLIZZARD_MODE_PREFIXES.items():
-        mode_columns = (
-            mode_identities[mode_identities["mode"].eq(mode)]
-            .drop(columns=["mode"])
-            .rename(
-                columns={
-                    "class_name": f"{prefix}_class_name",
-                    "spec_name": f"{prefix}_spec_name",
-                }
-            )
-        )
-        result = result.merge(mode_columns, on="player_key", how="left")
-        result[f"{prefix}_class_name"] = result[f"{prefix}_class_name"].fillna("")
-        result[f"{prefix}_spec_name"] = result[f"{prefix}_spec_name"].fillna("")
+        rating_column = f"{prefix}_rating"
+        has_mode_rating = result[rating_column].fillna(0).gt(0)
+        result[f"{prefix}_class_name"] = result["class_name"].where(has_mode_rating, "")
+        result[f"{prefix}_spec_name"] = result["spec_name"].where(has_mode_rating, "")
 
     return result
 
@@ -81,7 +83,7 @@ def prepare_checkpvp(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=FINAL_COLUMNS)
 
-    result = df.copy()
+    result = deduplicate_checkpvp_players(df)
     result["region"] = result["region"].astype(str).str.lower()
     result["realm_slug"] = result["realm"].map(slugify_realm)
     result["player_key"] = result.apply(
@@ -107,7 +109,11 @@ def prepare_checkpvp(df: pd.DataFrame) -> pd.DataFrame:
         result[column] = result.get(column, 0).fillna(0).astype(int)
 
     result = (
-        result.sort_values(["player_key", "rating_3v3", "rating_2v2", "rating_rbg"], ascending=False)
+        result.sort_values(
+            ["player_key", "rating_3v3", "rating_2v2", "rating_rbg"],
+            ascending=[True, False, False, False],
+            kind="mergesort",
+        )
         .drop_duplicates("player_key")
         .loc[
             :,
