@@ -64,7 +64,7 @@ def _players_table_sql(table_name: str) -> str:
         if column in TEXT_COLUMNS:
             columns.append(f"{column} text NOT NULL DEFAULT ''")
         else:
-            columns.append(f"{column} integer NOT NULL DEFAULT 0")
+            columns.append(f"{column} integer")
     return f"CREATE TABLE {table_name} ({', '.join(columns)})"
 
 
@@ -72,12 +72,12 @@ def _prepare_players(df: pd.DataFrame) -> pd.DataFrame:
     clean = df.copy()
     for column in PLAYER_COLUMNS:
         if column not in clean.columns:
-            clean[column] = "" if column in TEXT_COLUMNS else 0
+            clean[column] = "" if column in TEXT_COLUMNS else pd.NA
     clean = clean[PLAYER_COLUMNS]
     for column in TEXT_COLUMNS:
         clean[column] = clean[column].fillna("").astype(str)
     for column in INTEGER_COLUMNS:
-        clean[column] = pd.to_numeric(clean[column], errors="coerce").fillna(0).astype(int)
+        clean[column] = pd.to_numeric(clean[column], errors="coerce").astype("Int64")
     return clean
 
 
@@ -135,10 +135,7 @@ def _select_player_columns(columns: list[str] | tuple[str, ...] | None = None) -
 
 
 def _csv_read_dtypes(columns: list[str]) -> dict[str, str]:
-    return {
-        column: "category" if column in TEXT_COLUMNS else "uint16"
-        for column in columns
-    }
+    return {column: "category" for column in columns if column in TEXT_COLUMNS}
 
 
 def _write_copy_chunks_to_buffer(copy: Any, buffer: io.BytesIO) -> None:
@@ -194,7 +191,10 @@ def read_players_from_database(columns: list[str] | tuple[str, ...] | None = Non
     )
     for column in selected_columns:
         if column not in df:
-            df[column] = "" if column in TEXT_COLUMNS else 0
+            df[column] = "" if column in TEXT_COLUMNS else pd.NA
+    for column in selected_columns:
+        if column in INTEGER_COLUMNS:
+            df[column] = pd.to_numeric(df[column], errors="coerce").astype("Int64")
     return df[selected_columns]
 
 
@@ -249,5 +249,5 @@ def read_processed_players(
         df = pd.DataFrame(index=pd.RangeIndex(0))
     for column in selected_columns:
         if column not in df:
-            df[column] = "" if column in TEXT_COLUMNS else 0
+            df[column] = "" if column in TEXT_COLUMNS else pd.NA
     return df[selected_columns]

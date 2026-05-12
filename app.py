@@ -195,11 +195,11 @@ MAIN_COLUMN_TOOLTIPS = {
     "realm": "Реалм персонажа.",
     "class_name": "Класс персонажа.",
     "spec_name": "Спек персонажа.",
-    "shuffle_rating": "Рейтинг Solo Shuffle (из Blizzard ladder). Если нет участия: 0.",
-    "blitz_rating": "Рейтинг Blitz BG (из Blizzard ladder). Если нет участия: 0.",
-    "rating_2v2": "Рейтинг 2v2 (из check-pvp). Если нет участия: 0.",
-    "rating_3v3": "Рейтинг 3v3 (из check-pvp). Если нет участия: 0.",
-    "rating_rbg": "Рейтинг RBG (из check-pvp). Если нет участия: 0.",
+    "shuffle_rating": "Рейтинг Solo Shuffle (из Blizzard ladder). Пусто = нет данных Blizzard для этого режима/спека.",
+    "blitz_rating": "Рейтинг Blitz BG (из Blizzard ladder). Пусто = нет данных Blizzard для этого режима/спека.",
+    "rating_2v2": "Рейтинг 2v2 (из check-pvp). Пусто = нет строки check-pvp для этого персонажа/спека.",
+    "rating_3v3": "Рейтинг 3v3 (из check-pvp). Пусто = нет строки check-pvp для этого персонажа/спека.",
+    "rating_rbg": "Рейтинг RBG (из check-pvp). Пусто = нет строки check-pvp для этого персонажа/спека.",
 }
 
 SUMMARY_COLUMN_TOOLTIPS = {
@@ -278,17 +278,16 @@ def load_data() -> pd.DataFrame:
 
     for column in APP_DATA_COLUMNS:
         if column not in df.columns:
-            df[column] = 0 if column in RATING_COLUMNS else ""
+            df[column] = pd.NA if column in RATING_COLUMNS else ""
     df = df[APP_DATA_COLUMNS]
 
     for column in RATING_COLUMNS:
-        if str(df[column].dtype) == "uint16":
+        if str(df[column].dtype) == "UInt16":
             continue
         df[column] = (
             pd.to_numeric(df[column], errors="coerce")
-            .fillna(0)
             .clip(lower=0, upper=65535)
-            .astype("uint16")
+            .astype("UInt16")
         )
     for column in APP_CATEGORY_COLUMNS:
         df[column] = make_category_column(df[column])
@@ -889,7 +888,7 @@ def make_ratio(numerator: int | float, denominator: int | float, digits: int = 4
 
 
 def active_mode_ratings(df: pd.DataFrame, rating_column: str) -> pd.Series:
-    ratings = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
+    ratings = pd.to_numeric(df[rating_column], errors="coerce")
     return ratings[ratings > 0]
 
 
@@ -932,8 +931,8 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
             selected_spec_column: "spec_name",
         }
     )
-    if str(df[rating_column].dtype) != "uint16":
-        df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce").fillna(0)
+    if str(df[rating_column].dtype) != "UInt16":
+        df[rating_column] = pd.to_numeric(df[rating_column], errors="coerce")
     df = df[df[rating_column] > 0].copy()
     if selected_class_column != "class_name" and df["class_name"].eq("").any():
         mode_classes = df["class_name"].astype(str)
@@ -1456,13 +1455,13 @@ PLAYER_TABLE_GUIDE_EN = dedent(
     - `Realm` - character realm.
     - `Class` - class name, such as Druid, Mage, Warrior.
     - `Spec` - active specialization, such as Restoration, Fire, Arms.
-    - `Shuffle` - current Solo Shuffle rating from Blizzard PvP leaderboards. Missing participation is shown as `0`.
-    - `Blitz BG` - current Battleground Blitz rating from Blizzard PvP leaderboards. Missing participation is shown as `0`.
-    - `2v2`, `3v3`, `RBG` - ratings from check-pvp. Missing mode data is shown as `0`.
+    - `Shuffle` - current Solo Shuffle rating from Blizzard PvP leaderboards. Blank means Blizzard did not return a row for this mode/spec.
+    - `Blitz BG` - current Battleground Blitz rating from Blizzard PvP leaderboards. Blank means Blizzard did not return a row for this mode/spec.
+    - `2v2`, `3v3`, `RBG` - ratings from check-pvp. Blank means check-pvp did not return a row for this character/spec.
 
     **How to interpret values**
 
-    `0` does not always mean a weak character. In this dataset it usually means **no detected participation in that mode**. The summary table and charts ignore these `0` values for the selected mode, so mode-level statistics describe active participants only.
+    `0` means the source explicitly returned a zero rating. Blank means the rating is unknown because the character/spec is missing from that source. Summary tables and charts use only `rating > 0` for active mode statistics.
 
     **Useful questions this table can answer**
 

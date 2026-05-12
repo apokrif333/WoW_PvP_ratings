@@ -59,7 +59,6 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
             columns="mode",
             values="rating",
             aggfunc="max",
-            fill_value=0,
         )
         .rename(columns={"shuffle": "shuffle_rating", "blitz": "blitz_rating"})
         .reset_index()
@@ -68,11 +67,11 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
     result = ratings
     for column in ["shuffle_rating", "blitz_rating"]:
         if column not in result:
-            result[column] = 0
+            result[column] = pd.NA
 
     for mode, prefix in BLIZZARD_MODE_PREFIXES.items():
         rating_column = f"{prefix}_rating"
-        has_mode_rating = result[rating_column].fillna(0).gt(0)
+        has_mode_rating = result[rating_column].notna()
         result[f"{prefix}_class_name"] = result["class_name"].where(has_mode_rating, "")
         result[f"{prefix}_spec_name"] = result["spec_name"].where(has_mode_rating, "")
 
@@ -173,10 +172,8 @@ def build_final_dataset(
             optional_series(merged, f"{column}_blizzard"),
         )
 
-    for column in ["shuffle_rating", "blitz_rating"]:
-        final[column] = optional_series(merged, column, 0).fillna(0).astype(int)
-    for column in ["rating_2v2", "rating_3v3", "rating_rbg"]:
-        final[column] = optional_series(merged, column, 0).fillna(0).astype(int)
+    for column in ["shuffle_rating", "blitz_rating", "rating_2v2", "rating_3v3", "rating_rbg"]:
+        final[column] = pd.to_numeric(optional_series(merged, column, pd.NA), errors="coerce").astype("Int64")
     for prefix in BLIZZARD_MODE_PREFIXES.values():
         final[f"{prefix}_class_name"] = optional_series(merged, f"{prefix}_class_name").fillna("")
         final[f"{prefix}_spec_name"] = optional_series(merged, f"{prefix}_spec_name").fillna("")
