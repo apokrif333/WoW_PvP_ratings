@@ -1,79 +1,65 @@
 from __future__ import annotations
 
 import json
+import random
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
+import time
 from typing import Any
-from urllib.parse import urlparse
 
 import pandas as pd
+import requests
+from requests.exceptions import RequestException
 
-from wowpvp.blizzard import BlizzardClient, parse_spec_leaderboard_slug
-from wowpvp.constants import CLASS_SLUG_TO_NAME, SPEC_ID_TO_INFO, SPEC_SLUG_TO_NAME
+from wowpvp.constants import SPEC_ID_TO_INFO
 from wowpvp.storage import PLAYER_COLUMNS, write_players_to_database
-from wowpvp.utils import ensure_dirs, normalize_character_name, player_key, slugify_realm
+from wowpvp.utils import ensure_dirs, normalize_character_name, slugify_realm
 
 
-SUMMARY_CACHE_COLUMNS = [
+WEB_PVP_CACHE_COLUMNS = [
     "player_key",
     "region",
     "realm_slug",
     "character_name",
     "status_code",
-    "brackets_json",
-    "fetched_at",
-]
-BRACKET_CACHE_COLUMNS = [
-    "player_key",
-    "region",
-    "realm_slug",
-    "character_name",
-    "bracket",
-    "status_code",
-    "rating",
-    "class_name",
-    "spec_name",
-    "season_id",
-    "played",
-    "won",
-    "lost",
-    "fetched_at",
-]
-CHARACTER_CACHE_COLUMNS = [
-    "player_key",
-    "region",
-    "realm_slug",
-    "character_name",
-    "status_code",
-    "active_class_name",
-    "active_spec_name",
+    "payload_json",
     "fetched_at",
 ]
 RATING_COLUMNS = ["shuffle_rating", "blitz_rating", "rating_2v2", "rating_3v3", "rating_rbg"]
-NON_SPEC_BRACKET_TO_COLUMN = {
-    "2v2": "rating_2v2",
-    "3v3": "rating_3v3",
-    "rbg": "rating_rbg",
-}
 SPEC_MODE_TO_COLUMN = {
     "shuffle": "shuffle_rating",
     "blitz": "blitz_rating",
 }
-CLASS_NAME_TO_SLUG = {value: key for key, value in CLASS_SLUG_TO_NAME.items()}
-SPEC_NAME_TO_SLUG = {value: key for key, value in SPEC_SLUG_TO_NAME.items()}
-
-
-def class_spec_bracket(mode: str, class_name: str, spec_name: str) -> str | None:
-    class_slug = CLASS_NAME_TO_SLUG.get(str(class_name or ""))
-    spec_slug = SPEC_NAME_TO_SLUG.get(str(spec_name or ""))
-    if not class_slug or not spec_slug:
-        return None
-    return f"{mode}-{class_slug}-{spec_slug}"
-
-
-def bracket_from_href(href: str) -> str:
-    return Path(urlparse(href).path).name
+RETRYABLE_ERROR_MARKERS = (
+    "too many 429",
+    "max retries exceeded",
+    "temporarily unavailable",
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection aborted",
+    "remote disconnected",
+    "name resolution",
+    "getaddrinfo failed",
+    "503",
+    "504",
+)
+WOW_PROFILE_ORIGIN = "https://worldofwarcraft.blizzard.com"
+WOW_PROFILE_HEADERS = {
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0 Safari/537.36 WoWPvPData/1.0"
+    ),
+}
+WEB_RETRYABLE_STATUS_CODES = {403, 408, 425, 429, 500, 502, 503, 504}
+_thread_local = threading.local()
+_request_lock = threading.Lock()
+_next_request_at = 0.0
 
 
 def now_iso() -> str:
@@ -120,93 +106,6 @@ def player_identities(df: pd.DataFrame) -> pd.DataFrame:
     return identities.drop_duplicates("player_key").reset_index(drop=True)
 
 
-def fetch_pvp_summary(client: BlizzardClient, row: pd.Series) -> dict[str, Any]:
-    region = str(row["region"])
-    realm_slug = str(row["realm_slug"])
-    character_name = str(row["character_name"])
-    response = client.get_profile_response(region, f"character/{realm_slug}/{character_name}/pvp-summary")
-    record: dict[str, Any] = {
-        "player_key": row["player_key"],
-        "region": region,
-        "realm_slug": realm_slug,
-        "character_name": character_name,
-        "status_code": response.status_code,
-        "brackets_json": "[]",
-        "fetched_at": now_iso(),
-    }
-    if response.status_code == 200:
-        data = response.json()
-        brackets = [bracket_from_href(item.get("href", "")) for item in data.get("brackets", [])]
-        record["brackets_json"] = json.dumps(sorted(bracket for bracket in brackets if bracket))
-    return record
-
-
-def fetch_character_profile(client: BlizzardClient, row: pd.Series) -> dict[str, Any]:
-    region = str(row["region"])
-    realm_slug = str(row["realm_slug"])
-    character_name = str(row["character_name"])
-    response = client.get_profile_response(region, f"character/{realm_slug}/{character_name}")
-    record: dict[str, Any] = {
-        "player_key": row["player_key"],
-        "region": region,
-        "realm_slug": realm_slug,
-        "character_name": character_name,
-        "status_code": response.status_code,
-        "active_class_name": "",
-        "active_spec_name": "",
-        "fetched_at": now_iso(),
-    }
-    if response.status_code == 200:
-        data = response.json()
-        active_spec = data.get("active_spec") or {}
-        spec_info = SPEC_ID_TO_INFO.get(active_spec.get("id"))
-        if spec_info:
-            record["active_class_name"], record["active_spec_name"] = spec_info
-        else:
-            record["active_class_name"] = (data.get("character_class") or {}).get("name", "")
-            record["active_spec_name"] = active_spec.get("name", "")
-    return record
-
-
-def fetch_pvp_bracket(client: BlizzardClient, row: pd.Series, bracket: str) -> dict[str, Any]:
-    region = str(row["region"])
-    realm_slug = str(row["realm_slug"])
-    character_name = str(row["character_name"])
-    response = client.get_profile_response(
-        region,
-        f"character/{realm_slug}/{character_name}/pvp-bracket/{bracket}",
-    )
-    record: dict[str, Any] = {
-        "player_key": row["player_key"],
-        "region": region,
-        "realm_slug": realm_slug,
-        "character_name": character_name,
-        "bracket": bracket,
-        "status_code": response.status_code,
-        "rating": pd.NA,
-        "class_name": "",
-        "spec_name": "",
-        "season_id": pd.NA,
-        "played": pd.NA,
-        "won": pd.NA,
-        "lost": pd.NA,
-        "fetched_at": now_iso(),
-    }
-    if response.status_code == 200:
-        data = response.json()
-        record["rating"] = data.get("rating")
-        record["season_id"] = (data.get("season") or {}).get("id")
-        stats = data.get("season_match_statistics") or {}
-        record["played"] = stats.get("played")
-        record["won"] = stats.get("won")
-        record["lost"] = stats.get("lost")
-        if bracket.startswith(("shuffle-", "blitz-")):
-            _, class_name, spec_name = parse_spec_leaderboard_slug(bracket)
-            record["class_name"] = class_name
-            record["spec_name"] = spec_name
-    return record
-
-
 def run_fetch_pool(
     label: str,
     tasks: list[Any],
@@ -217,118 +116,396 @@ def run_fetch_pool(
     cache_path: Path,
     columns: list[str],
     key_columns: list[str],
+    max_task_attempts: int = 25,
+    retry_delay_seconds: float = 20.0,
+    max_retry_delay_seconds: float = 600.0,
 ) -> pd.DataFrame:
     if not tasks:
         return cache
 
-    records: list[dict[str, Any]] = []
-    worker_count = max(1, min(max_workers, len(tasks)))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = [executor.submit(fetch_one, task) for task in tasks]
-        for index, future in enumerate(as_completed(futures), start=1):
-            try:
-                records.append(future.result())
-            except Exception as exc:
-                print(f"{label}: task failed: {exc}")
-            if len(records) >= flush_every:
-                cache = append_cache(cache, records, columns, key_columns)
-                save_cache(cache_path, cache)
-                records.clear()
-                print(f"{label}: fetched {index}/{len(tasks)}")
+    max_task_attempts = max(1, int(max_task_attempts))
+    retry_delay_seconds = max(1.0, float(retry_delay_seconds))
+    max_retry_delay_seconds = max(retry_delay_seconds, float(max_retry_delay_seconds))
 
-    cache = append_cache(cache, records, columns, key_columns)
-    save_cache(cache_path, cache)
-    print(f"{label}: fetched {len(tasks)}/{len(tasks)}")
+    def is_retryable_error(exc: Exception) -> bool:
+        if isinstance(exc, RequestException):
+            return True
+        message = str(exc).lower()
+        return any(marker in message for marker in RETRYABLE_ERROR_MARKERS)
+
+    task_entries = list(enumerate(tasks))
+    attempts: dict[int, int] = {index: 0 for index, _ in task_entries}
+    pending = task_entries
+    total = len(task_entries)
+    completed = 0
+    records: list[dict[str, Any]] = []
+    round_index = 0
+    permanent_failures = 0
+
+    while pending:
+        round_index += 1
+        worker_count = max(1, min(max_workers, len(pending)))
+        retry_queue: list[tuple[int, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(fetch_one, task): (task_index, task)
+                for task_index, task in pending
+            }
+            for future in as_completed(futures):
+                task_index, task = futures[future]
+                try:
+                    records.append(future.result())
+                    completed += 1
+                except Exception as exc:
+                    attempts[task_index] += 1
+                    if is_retryable_error(exc) and attempts[task_index] < max_task_attempts:
+                        retry_queue.append((task_index, task))
+                    else:
+                        permanent_failures += 1
+                        print(
+                            f"{label}: task failed permanently after {attempts[task_index]} attempt(s): {exc}"
+                        )
+                if len(records) >= flush_every:
+                    cache = append_cache(cache, records, columns, key_columns)
+                    save_cache(cache_path, cache)
+                    records.clear()
+                    print(f"{label}: fetched {completed}/{total}")
+
+        cache = append_cache(cache, records, columns, key_columns)
+        save_cache(cache_path, cache)
+        records.clear()
+
+        if retry_queue:
+            delay = min(max_retry_delay_seconds, retry_delay_seconds * (2 ** (round_index - 1)))
+            print(
+                f"{label}: retrying {len(retry_queue)} transient failures in {delay:.0f}s "
+                f"(retry round {round_index + 1})"
+            )
+            time.sleep(delay)
+        pending = retry_queue
+
+    print(f"{label}: fetched {completed}/{total}")
+    if permanent_failures:
+        print(f"{label}: permanent failures={permanent_failures}")
     return cache
 
 
-def summary_brackets(summary_cache: pd.DataFrame) -> dict[str, set[str]]:
-    mapping: dict[str, set[str]] = {}
-    for row in summary_cache.itertuples(index=False):
-        status_code = getattr(row, "status_code")
-        if pd.isna(status_code) or int(status_code) != 200:
-            continue
-        try:
-            brackets = set(json.loads(getattr(row, "brackets_json") or "[]"))
-        except json.JSONDecodeError:
-            brackets = set()
-        mapping[getattr(row, "player_key")] = brackets
-    return mapping
+def normalize_player_ratings(df: pd.DataFrame | None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=PLAYER_COLUMNS)
+
+    normalized = df.copy()
+    for column in PLAYER_COLUMNS:
+        if column not in normalized:
+            normalized[column] = "" if column not in RATING_COLUMNS else pd.NA
+    for column in [column for column in PLAYER_COLUMNS if column not in RATING_COLUMNS]:
+        normalized[column] = normalized[column].fillna("").astype(str)
+    for column in RATING_COLUMNS:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").astype("Int64")
+    return normalized[PLAYER_COLUMNS]
 
 
-def pending_summary_players(
+def incremental_refresh_player_keys(current: pd.DataFrame, previous: pd.DataFrame | None) -> set[str] | None:
+    previous = normalize_player_ratings(previous)
+    if previous.empty:
+        print("WoW profile pvp.json enrichment: no previous dataset; applying cached enrichment only")
+        return set()
+
+    current = normalize_player_ratings(current)
+    missing = current[RATING_COLUMNS].isna().any(axis=1)
+    missing_keys = set(current.loc[missing, "player_key"].astype(str))
+    if not missing_keys:
+        return set()
+
+    identity_columns = ["player_key", "class_name", "spec_name"]
+    previous_ratings = (
+        previous.sort_values(identity_columns, kind="mergesort")
+        .drop_duplicates(identity_columns, keep="last")
+        .loc[:, identity_columns + RATING_COLUMNS]
+    )
+    current_ratings = (
+        current.sort_values(identity_columns, kind="mergesort")
+        .drop_duplicates(identity_columns, keep="last")
+        .loc[:, identity_columns + RATING_COLUMNS]
+    )
+    merged = current_ratings.merge(
+        previous_ratings,
+        on=identity_columns,
+        how="left",
+        suffixes=("_current", "_previous"),
+        indicator=True,
+    )
+
+    changed = merged["_merge"].eq("left_only")
+    for column in RATING_COLUMNS:
+        current_column = f"{column}_current"
+        previous_column = f"{column}_previous"
+        current_known = merged[current_column].notna()
+        previous_known = merged[previous_column].notna()
+        changed |= current_known & (~previous_known | merged[current_column].ne(merged[previous_column]))
+
+    changed_keys = set(merged.loc[changed, "player_key"].astype(str))
+    refresh_keys = missing_keys & changed_keys
+    print(
+        "WoW profile pvp.json enrichment: incremental refresh players="
+        f"{len(refresh_keys)} (players with missing ratings={len(missing_keys)}, changed/new={len(changed_keys)})"
+    )
+    return refresh_keys
+
+
+def get_web_session() -> requests.Session:
+    session = getattr(_thread_local, "wow_profile_session", None)
+    if session is None:
+        session = requests.Session()
+        session.headers.update(WOW_PROFILE_HEADERS)
+        _thread_local.wow_profile_session = session
+    return session
+
+
+def wait_for_request_slot(delay_seconds: float, jitter_seconds: float) -> None:
+    global _next_request_at
+    delay_seconds = max(0.0, float(delay_seconds))
+    jitter_seconds = max(0.0, float(jitter_seconds))
+    if delay_seconds <= 0 and jitter_seconds <= 0:
+        return
+
+    with _request_lock:
+        now = time.monotonic()
+        wait_seconds = max(0.0, _next_request_at - now)
+        spacing = delay_seconds + random.uniform(0.0, jitter_seconds)
+        _next_request_at = max(now, _next_request_at) + spacing
+
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+
+
+def wow_profile_pvp_url(region: str, realm_slug: str, character_name: str) -> str:
+    return (
+        f"{WOW_PROFILE_ORIGIN}/en-us/character/"
+        f"{region.lower()}/{slugify_realm(realm_slug)}/{normalize_character_name(character_name)}/pvp.json"
+    )
+
+
+def fetch_web_pvp_profile(
+    row: pd.Series,
+    request_delay_seconds: float,
+    request_jitter_seconds: float,
+) -> dict[str, Any]:
+    region = str(row["region"]).lower()
+    realm_slug = slugify_realm(str(row["realm_slug"]))
+    character_name = normalize_character_name(str(row["character_name"]))
+    wait_for_request_slot(request_delay_seconds, request_jitter_seconds)
+    response = get_web_session().get(
+        wow_profile_pvp_url(region, realm_slug, character_name),
+        timeout=45,
+    )
+    if response.status_code in WEB_RETRYABLE_STATUS_CODES:
+        raise RequestException(f"WoW profile pvp.json returned status {response.status_code}")
+
+    record: dict[str, Any] = {
+        "player_key": row["player_key"],
+        "region": region,
+        "realm_slug": realm_slug,
+        "character_name": character_name,
+        "status_code": response.status_code,
+        "payload_json": "",
+        "fetched_at": now_iso(),
+    }
+    if response.status_code == 200:
+        record["payload_json"] = response.text
+    return record
+
+
+def pending_web_profile_players(
     df: pd.DataFrame,
     identities: pd.DataFrame,
-    summary_cache: pd.DataFrame,
+    web_cache: pd.DataFrame,
     force: bool,
+    refresh_player_keys: set[str] | None = None,
 ) -> pd.DataFrame:
     missing = df[RATING_COLUMNS].isna().any(axis=1)
-    player_keys = set(df.loc[missing, "player_key"])
-    if not force:
-        cached_keys = set(summary_cache["player_key"].astype(str))
-        player_keys -= cached_keys
+    player_keys = set(df.loc[missing, "player_key"].astype(str))
+    if refresh_player_keys is not None:
+        player_keys &= refresh_player_keys
+    if not force and refresh_player_keys is None and not web_cache.empty:
+        cached = web_cache[
+            web_cache["status_code"].isin([200, 404])
+        ]["player_key"].astype(str)
+        player_keys -= set(cached)
     return identities[identities["player_key"].isin(player_keys)].reset_index(drop=True)
 
 
-def desired_bracket_tasks(
-    df: pd.DataFrame,
-    identities: pd.DataFrame,
-    summary_cache: pd.DataFrame,
-    bracket_cache: pd.DataFrame,
-    force: bool,
-) -> list[tuple[pd.Series, str]]:
-    brackets_by_player = summary_brackets(summary_cache)
-    identity_by_key = identities.set_index("player_key")
-    cached = set()
-    if not force and not bracket_cache.empty:
-        cached = set(map(tuple, bracket_cache[["player_key", "bracket"]].astype(str).itertuples(index=False, name=None)))
+def carry_forward_previous_ratings(current: pd.DataFrame, previous: pd.DataFrame | None) -> pd.DataFrame:
+    previous = normalize_player_ratings(previous)
+    current = normalize_player_ratings(current)
+    if previous.empty or current.empty:
+        return current
 
-    wanted: set[tuple[str, str]] = set()
-    for row in df.itertuples(index=False):
-        player_brackets = brackets_by_player.get(row.player_key)
-        if not player_brackets:
-            continue
+    identity_columns = ["player_key", "class_name", "spec_name"]
+    previous = previous[previous["player_key"].isin(set(current["player_key"].astype(str)))].copy()
+    previous = (
+        previous.sort_values(identity_columns, kind="mergesort")
+        .drop_duplicates(identity_columns, keep="last")
+    )
+    current = (
+        current.sort_values(identity_columns, kind="mergesort")
+        .drop_duplicates(identity_columns, keep="last")
+    )
 
-        for mode, rating_column in SPEC_MODE_TO_COLUMN.items():
-            if pd.isna(getattr(row, rating_column)):
-                bracket = class_spec_bracket(mode, row.class_name, row.spec_name)
-                if bracket and bracket in player_brackets:
-                    wanted.add((row.player_key, bracket))
+    previous_by_identity = previous.set_index(identity_columns)
+    current_by_identity = current.set_index(identity_columns)
+    for column in RATING_COLUMNS:
+        previous_values = previous_by_identity[column].reindex(current_by_identity.index)
+        current_by_identity[column] = current_by_identity[column].where(
+            current_by_identity[column].notna(),
+            previous_values,
+        )
 
-        for bracket in NON_SPEC_BRACKET_TO_COLUMN:
-            if pd.isna(getattr(row, NON_SPEC_BRACKET_TO_COLUMN[bracket])) and bracket in player_brackets:
-                wanted.add((row.player_key, bracket))
-
-        for bracket in player_brackets:
-            if bracket.startswith(("shuffle-", "blitz-")):
-                wanted.add((row.player_key, bracket))
-
-    tasks: list[tuple[pd.Series, str]] = []
-    for player_key, bracket in sorted(wanted):
-        if (player_key, bracket) in cached:
-            continue
-        if player_key in identity_by_key.index:
-            identity = identity_by_key.loc[player_key].copy()
-            identity["player_key"] = player_key
-            tasks.append((identity, bracket))
-    return tasks
-
-
-def pending_character_players(
-    identities: pd.DataFrame,
-    bracket_cache: pd.DataFrame,
-    character_cache: pd.DataFrame,
-    force: bool,
-) -> pd.DataFrame:
-    non_spec_success = bracket_cache[
-        bracket_cache["bracket"].isin(NON_SPEC_BRACKET_TO_COLUMN)
-        & bracket_cache["status_code"].eq(200)
-        & bracket_cache["rating"].notna()
+    previous_only = previous_by_identity.loc[
+        ~previous_by_identity.index.isin(current_by_identity.index)
     ]
-    player_keys = set(non_spec_success["player_key"].astype(str))
-    if not force:
-        player_keys -= set(character_cache["player_key"].astype(str))
-    return identities[identities["player_key"].isin(player_keys)].reset_index(drop=True)
+    combined = pd.concat(
+        [current_by_identity.reset_index(), previous_only.reset_index()],
+        ignore_index=True,
+    )
+    return combined[PLAYER_COLUMNS]
+
+
+def web_rating_value(data: dict[str, Any], key: str) -> int | None:
+    item = data.get(key)
+    if not isinstance(item, dict):
+        return None
+    rating = item.get("rating")
+    if rating is None:
+        return None
+    return int(rating)
+
+
+def target_row_index(enriched: pd.DataFrame, player_key: str, shuffle_ratings: dict[tuple[str, str], int]) -> int | None:
+    player_rows = enriched[enriched["player_key"].eq(player_key)]
+    if player_rows.empty:
+        return None
+
+    non_spec_known = player_rows[["blitz_rating", "rating_2v2", "rating_3v3", "rating_rbg"]].notna().any(axis=1)
+    if non_spec_known.any():
+        return int(player_rows[non_spec_known].index[0])
+
+    best_shuffle: tuple[int, int] | None = None
+    for index, row in player_rows.iterrows():
+        identity = (str(row["class_name"]), str(row["spec_name"]))
+        rating = shuffle_ratings.get(identity)
+        if rating is not None and (best_shuffle is None or rating > best_shuffle[0]):
+            best_shuffle = (rating, int(index))
+    if best_shuffle is not None:
+        return best_shuffle[1]
+
+    ratings = player_rows[RATING_COLUMNS].max(axis=1, skipna=True).fillna(-1)
+    return int(ratings.sort_values(ascending=False, kind="mergesort").index[0])
+
+
+def parse_web_shuffle_ratings(payload: dict[str, Any]) -> dict[tuple[str, str], int]:
+    ratings = payload.get("ratings") or {}
+    shuffle = ratings.get("shuffle") or {}
+    specs = shuffle.get("specs") or []
+    result: dict[tuple[str, str], int] = {}
+    for item in specs:
+        if not isinstance(item, dict):
+            continue
+        specialization = item.get("specialization") or {}
+        spec_id = specialization.get("id")
+        class_spec = SPEC_ID_TO_INFO.get(spec_id)
+        if not class_spec:
+            spec_name = specialization.get("name")
+            if not spec_name:
+                continue
+            class_spec = ("", str(spec_name))
+        rating = int(item.get("rating") or 0)
+        result[(class_spec[0], class_spec[1])] = rating
+    return result
+
+
+def apply_web_pvp_enrichment(df: pd.DataFrame, web_cache: pd.DataFrame) -> pd.DataFrame:
+    enriched = normalize_player_ratings(df)
+    if web_cache.empty:
+        return finalize_enriched_players(enriched)
+
+    identity_by_key = (
+        enriched.sort_values("player_key", kind="mergesort")
+        .drop_duplicates("player_key")
+        .set_index("player_key")[["region", "character_name", "realm", "realm_slug"]]
+        .to_dict("index")
+    )
+
+    successful = web_cache[web_cache["status_code"].eq(200)].copy()
+    successful = successful.drop_duplicates("player_key", keep="last")
+    for row in successful.itertuples(index=False):
+        player_key_value = str(row.player_key)
+        if player_key_value not in identity_by_key:
+            continue
+        try:
+            payload = json.loads(str(row.payload_json or "{}"))
+        except json.JSONDecodeError:
+            continue
+
+        ratings = payload.get("ratings") or {}
+        shuffle_ratings = parse_web_shuffle_ratings(payload)
+        for (class_name, spec_name), rating in shuffle_ratings.items():
+            if not class_name or not spec_name:
+                continue
+            mask = (
+                enriched["player_key"].eq(player_key_value)
+                & enriched["class_name"].eq(class_name)
+                & enriched["spec_name"].eq(spec_name)
+            )
+            if not mask.any() and rating <= 0:
+                continue
+            enriched = ensure_player_spec_row(
+                enriched,
+                identity_by_key,
+                player_key_value,
+                class_name,
+                spec_name,
+            )
+            mask = (
+                enriched["player_key"].eq(player_key_value)
+                & enriched["class_name"].eq(class_name)
+                & enriched["spec_name"].eq(spec_name)
+            )
+            enriched.loc[mask, "shuffle_rating"] = rating
+
+        non_spec_ratings = {
+            "rating_2v2": web_rating_value(ratings, "2v2"),
+            "rating_3v3": web_rating_value(ratings, "3v3"),
+            "rating_rbg": web_rating_value(ratings, "battlegrounds"),
+            "blitz_rating": web_rating_value(ratings, "blitz"),
+        }
+        non_spec_ratings = {
+            column: value for column, value in non_spec_ratings.items() if value is not None
+        }
+        if non_spec_ratings:
+            index = target_row_index(enriched, player_key_value, shuffle_ratings)
+            if index is not None:
+                for column, value in non_spec_ratings.items():
+                    enriched.at[index, column] = value
+
+    return finalize_enriched_players(enriched)
+
+
+def finalize_enriched_players(df: pd.DataFrame) -> pd.DataFrame:
+    enriched = normalize_player_ratings(df)
+    for column in RATING_COLUMNS:
+        enriched[column] = pd.to_numeric(enriched[column], errors="coerce").astype("Int64")
+    for mode in SPEC_MODE_TO_COLUMN:
+        rating_column = f"{mode}_rating"
+        enriched[f"{mode}_class_name"] = enriched["class_name"].where(enriched[rating_column].notna(), "")
+        enriched[f"{mode}_spec_name"] = enriched["spec_name"].where(enriched[rating_column].notna(), "")
+
+    return enriched[PLAYER_COLUMNS].sort_values(
+        ["rating_3v3", "shuffle_rating", "blitz_rating", "rating_2v2", "rating_rbg"],
+        ascending=False,
+        na_position="last",
+    )
 
 
 def ensure_player_spec_row(
@@ -366,99 +543,25 @@ def ensure_player_spec_row(
     return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
 
 
-def apply_enrichment(
-    df: pd.DataFrame,
-    summary_cache: pd.DataFrame,
-    bracket_cache: pd.DataFrame,
-    character_cache: pd.DataFrame,
-) -> pd.DataFrame:
-    enriched = df.copy()
-    for column in RATING_COLUMNS:
-        enriched[column] = pd.to_numeric(enriched[column], errors="coerce").astype("Int64")
-
-    identity_by_key = (
-        enriched.sort_values("player_key", kind="mergesort")
-        .drop_duplicates("player_key")
-        .set_index("player_key")[["region", "character_name", "realm", "realm_slug"]]
-        .to_dict("index")
-    )
-    brackets_by_player = summary_brackets(summary_cache)
-
-    for row in enriched.itertuples(index=True):
-        player_brackets = brackets_by_player.get(row.player_key)
-        if player_brackets is None:
-            continue
-        for mode, rating_column in SPEC_MODE_TO_COLUMN.items():
-            bracket = class_spec_bracket(mode, row.class_name, row.spec_name)
-            if pd.isna(getattr(row, rating_column)) and bracket and bracket not in player_brackets:
-                enriched.at[row.Index, rating_column] = 0
-
-    successful_brackets = bracket_cache[
-        bracket_cache["status_code"].eq(200) & bracket_cache["rating"].notna()
-    ].copy()
-    for row in successful_brackets.itertuples(index=False):
-        player_key = str(row.player_key)
-        bracket = str(row.bracket)
-        if bracket.startswith(("shuffle-", "blitz-")):
-            mode, class_name, spec_name = parse_spec_leaderboard_slug(bracket)
-            enriched = ensure_player_spec_row(enriched, identity_by_key, player_key, class_name, spec_name)
-            mask = (
-                enriched["player_key"].eq(player_key)
-                & enriched["class_name"].eq(class_name)
-                & enriched["spec_name"].eq(spec_name)
-            )
-            rating_column = SPEC_MODE_TO_COLUMN[mode]
-            enriched.loc[mask, rating_column] = int(row.rating)
-            enriched.loc[mask, f"{mode}_class_name"] = class_name
-            enriched.loc[mask, f"{mode}_spec_name"] = spec_name
-
-    active_specs = character_cache[
-        character_cache["status_code"].eq(200)
-        & character_cache["active_class_name"].astype(str).ne("")
-        & character_cache["active_spec_name"].astype(str).ne("")
-    ].set_index("player_key")
-    for row in successful_brackets.itertuples(index=False):
-        player_key = str(row.player_key)
-        bracket = str(row.bracket)
-        rating_column = NON_SPEC_BRACKET_TO_COLUMN.get(bracket)
-        if not rating_column or player_key not in active_specs.index:
-            continue
-        active = active_specs.loc[player_key]
-        class_name = str(active["active_class_name"])
-        spec_name = str(active["active_spec_name"])
-        enriched = ensure_player_spec_row(enriched, identity_by_key, player_key, class_name, spec_name)
-        mask = (
-            enriched["player_key"].eq(player_key)
-            & enriched["class_name"].eq(class_name)
-            & enriched["spec_name"].eq(spec_name)
-        )
-        enriched.loc[mask, rating_column] = int(row.rating)
-
-    for column in RATING_COLUMNS:
-        enriched[column] = pd.to_numeric(enriched[column], errors="coerce").astype("Int64")
-    for mode in SPEC_MODE_TO_COLUMN:
-        rating_column = f"{mode}_rating"
-        enriched[f"{mode}_class_name"] = enriched["class_name"].where(enriched[rating_column].notna(), "")
-        enriched[f"{mode}_spec_name"] = enriched["spec_name"].where(enriched[rating_column].notna(), "")
-
-    return enriched[PLAYER_COLUMNS].sort_values(
-        ["rating_3v3", "shuffle_rating", "blitz_rating", "rating_2v2", "rating_rbg"],
-        ascending=False,
-        na_position="last",
-    )
-
-
 def enrich_processed_players(
-    client: BlizzardClient,
+    client: Any,
     data_dir: Path,
     max_workers: int = 16,
     force: bool = False,
+    incremental: bool = False,
+    previous_players: pd.DataFrame | None = None,
     max_players: int | None = None,
     max_brackets: int | None = None,
     flush_every: int = 1000,
+    retry_attempts: int = 25,
+    retry_delay_seconds: float = 20.0,
+    max_retry_delay_seconds: float = 600.0,
+    request_delay_seconds: float = 0.03,
+    request_jitter_seconds: float = 0.02,
     write_csv: bool = True,
     write_database: bool = True,
 ) -> Path:
+    del client
     ensure_dirs(data_dir)
     processed_path = data_dir / "processed" / "pvp_players.parquet"
     if not processed_path.exists():
@@ -466,62 +569,44 @@ def enrich_processed_players(
 
     df = pd.read_parquet(processed_path)
     identities = player_identities(df)
-    summary_path = data_dir / "raw" / "blizzard_profile_pvp_summaries.parquet"
-    bracket_path = data_dir / "raw" / "blizzard_profile_pvp_brackets.parquet"
-    character_path = data_dir / "raw" / "blizzard_profile_characters.parquet"
-    summary_cache = load_cache(summary_path, SUMMARY_CACHE_COLUMNS)
-    bracket_cache = load_cache(bracket_path, BRACKET_CACHE_COLUMNS)
-    character_cache = load_cache(character_path, CHARACTER_CACHE_COLUMNS)
+    refresh_player_keys = incremental_refresh_player_keys(df, previous_players) if incremental else None
+    web_cache_path = data_dir / "raw" / "worldofwarcraft_pvp_profiles.parquet"
+    web_cache = load_cache(web_cache_path, WEB_PVP_CACHE_COLUMNS)
 
-    summary_tasks = pending_summary_players(df, identities, summary_cache, force)
+    profile_tasks = pending_web_profile_players(df, identities, web_cache, force, refresh_player_keys)
     if max_players is not None:
-        summary_tasks = summary_tasks.head(max_players)
-    print(f"Blizzard profile enrichment: pending PvP summaries={len(summary_tasks)}")
-    summary_cache = run_fetch_pool(
-        "Blizzard profile PvP summaries",
-        list(summary_tasks.itertuples(index=False)),
-        lambda row: fetch_pvp_summary(client, pd.Series(row._asdict())),
+        profile_tasks = profile_tasks.head(max_players)
+    if (force or incremental) and not web_cache.empty and not profile_tasks.empty:
+        task_keys = set(profile_tasks["player_key"].astype(str))
+        web_cache = web_cache[~web_cache["player_key"].astype(str).isin(task_keys)].copy()
+    print(f"WoW profile pvp.json enrichment: pending profiles={len(profile_tasks)}")
+    web_cache = run_fetch_pool(
+        "WoW profile pvp.json",
+        list(profile_tasks.itertuples(index=False)),
+        lambda row: fetch_web_pvp_profile(
+            pd.Series(row._asdict()),
+            request_delay_seconds,
+            request_jitter_seconds,
+        ),
         max_workers,
         flush_every,
-        summary_cache,
-        summary_path,
-        SUMMARY_CACHE_COLUMNS,
+        web_cache,
+        web_cache_path,
+        WEB_PVP_CACHE_COLUMNS,
         ["player_key"],
+        retry_attempts,
+        retry_delay_seconds,
+        max_retry_delay_seconds,
     )
 
-    bracket_tasks = desired_bracket_tasks(df, identities, summary_cache, bracket_cache, force)
     if max_brackets is not None:
-        bracket_tasks = bracket_tasks[:max_brackets]
-    print(f"Blizzard profile enrichment: pending PvP brackets={len(bracket_tasks)}")
-    bracket_cache = run_fetch_pool(
-        "Blizzard profile PvP brackets",
-        bracket_tasks,
-        lambda task: fetch_pvp_bracket(client, task[0], task[1]),
-        max_workers,
-        flush_every,
-        bracket_cache,
-        bracket_path,
-        BRACKET_CACHE_COLUMNS,
-        ["player_key", "bracket"],
-    )
+        print("WoW profile pvp.json enrichment: --max-enrichment-brackets is ignored for pvp.json")
 
-    character_tasks = pending_character_players(identities, bracket_cache, character_cache, force)
-    if max_players is not None:
-        character_tasks = character_tasks.head(max_players)
-    print(f"Blizzard profile enrichment: pending character profiles={len(character_tasks)}")
-    character_cache = run_fetch_pool(
-        "Blizzard character profiles",
-        list(character_tasks.itertuples(index=False)),
-        lambda row: fetch_character_profile(client, pd.Series(row._asdict())),
-        max_workers,
-        flush_every,
-        character_cache,
-        character_path,
-        CHARACTER_CACHE_COLUMNS,
-        ["player_key"],
-    )
-
-    enriched = apply_enrichment(df, summary_cache, bracket_cache, character_cache)
+    base = carry_forward_previous_ratings(df, previous_players) if incremental else df
+    cache_for_apply = web_cache
+    if incremental and refresh_player_keys is not None:
+        cache_for_apply = web_cache[web_cache["player_key"].astype(str).isin(refresh_player_keys)].copy()
+    enriched = apply_web_pvp_enrichment(base, cache_for_apply)
     enriched.to_parquet(processed_path, index=False)
     csv_path = data_dir / "processed" / "pvp_players.csv"
     if write_csv:

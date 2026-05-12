@@ -7,6 +7,9 @@ from pathlib import Path
 
 
 GENERATED_DATA_DIRS = ("cache", "raw", "processed")
+PRESERVED_RAW_FILES = {
+    "worldofwarcraft_pvp_profiles.parquet",
+}
 
 
 def ensure_dirs(data_dir: Path) -> None:
@@ -28,6 +31,15 @@ def reset_generated_data(data_dir: Path) -> None:
         if data_dir not in target.parents:
             raise RuntimeError(f"Refusing to delete path outside data dir: {target}")
         if target.exists():
+            if directory_name == "raw":
+                for child in target.iterdir():
+                    if child.name in PRESERVED_RAW_FILES:
+                        continue
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                continue
             shutil.rmtree(target)
 
     ensure_dirs(data_dir)

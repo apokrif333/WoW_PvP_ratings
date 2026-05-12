@@ -28,4 +28,4 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Refresh database
-        run: python main.py --force --reset-data --skip-icons --skip-csv
+        run: python main.py --force --reset-data --skip-icons --skip-csv --enrich-wow-profile --incremental-enrichment --force-enrichment --enrichment-workers 8 --enrichment-request-delay 0.05 --enrichment-request-jitter 0.05 --enrichment-retry-attempts 8 --enrichment-retry-delay 10 --enrichment-retry-max-delay 120
