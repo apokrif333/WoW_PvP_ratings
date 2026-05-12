@@ -155,16 +155,19 @@ def build_final_dataset(
     blizzard = prepare_blizzard(load_raw_blizzard(data_dir))
     checkpvp = prepare_checkpvp(load_raw_checkpvp(data_dir))
 
+    merge_keys = ["player_key", "class_name", "spec_name"]
     merged = checkpvp.merge(
         blizzard,
-        on="player_key",
+        on=merge_keys,
         how="outer",
         suffixes=("_checkpvp", "_blizzard"),
     )
 
     final = pd.DataFrame()
     final["player_key"] = merged["player_key"]
-    for column in ["region", "character_name", "realm", "realm_slug", "class_name", "spec_name"]:
+    final["class_name"] = merged["class_name"].fillna("")
+    final["spec_name"] = merged["spec_name"].fillna("")
+    for column in ["region", "character_name", "realm", "realm_slug"]:
         final[column] = first_non_empty(
             optional_series(merged, f"{column}_checkpvp"),
             optional_series(merged, f"{column}_blizzard"),
@@ -175,14 +178,8 @@ def build_final_dataset(
     for column in ["rating_2v2", "rating_3v3", "rating_rbg"]:
         final[column] = optional_series(merged, column, 0).fillna(0).astype(int)
     for prefix in BLIZZARD_MODE_PREFIXES.values():
-        final[f"{prefix}_class_name"] = first_non_empty(
-            optional_series(merged, f"{prefix}_class_name"),
-            final["class_name"],
-        )
-        final[f"{prefix}_spec_name"] = first_non_empty(
-            optional_series(merged, f"{prefix}_spec_name"),
-            final["spec_name"],
-        )
+        final[f"{prefix}_class_name"] = optional_series(merged, f"{prefix}_class_name").fillna("")
+        final[f"{prefix}_spec_name"] = optional_series(merged, f"{prefix}_spec_name").fillna("")
 
     final = final[FINAL_COLUMNS].sort_values(
         ["rating_3v3", "shuffle_rating", "blitz_rating", "rating_2v2", "rating_rbg"],
