@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import random
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from pathlib import Path
 import time
@@ -56,7 +57,7 @@ WOW_PROFILE_HEADERS = {
         "Chrome/125.0 Safari/537.36 WoWPvPData/1.0"
     ),
 }
-WEB_RETRYABLE_STATUS_CODES = {403, 408, 425, 429, 500, 502, 503, 504}
+WEB_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 _thread_local = threading.local()
 _request_lock = threading.Lock()
 _next_request_at = 0.0
@@ -119,6 +120,7 @@ def run_fetch_pool(
     max_task_attempts: int = 25,
     retry_delay_seconds: float = 20.0,
     max_retry_delay_seconds: float = 600.0,
+    heartbeat_seconds: float = 15.0,
 ) -> pd.DataFrame:
     if not tasks:
         return cache
@@ -126,6 +128,7 @@ def run_fetch_pool(
     max_task_attempts = max(1, int(max_task_attempts))
     retry_delay_seconds = max(1.0, float(retry_delay_seconds))
     max_retry_delay_seconds = max(retry_delay_seconds, float(max_retry_delay_seconds))
+    heartbeat_seconds = max(1.0, float(heartbeat_seconds))
 
     def is_retryable_error(exc: Exception) -> bool:
         if isinstance(exc, RequestException):
@@ -141,6 +144,32 @@ def run_fetch_pool(
     records: list[dict[str, Any]] = []
     round_index = 0
     permanent_failures = 0
+    transient_failures = 0
+    status_counts: Counter[str] = Counter()
+    started_at = time.monotonic()
+    last_heartbeat_at = started_at
+    last_save_at = started_at
+
+    def print_progress(force: bool = False) -> None:
+        nonlocal last_heartbeat_at
+        now = time.monotonic()
+        if not force and now - last_heartbeat_at < heartbeat_seconds:
+            return
+        elapsed = max(0.001, now - started_at)
+        rate_per_minute = completed / elapsed * 60
+        remaining = max(0, total - completed)
+        eta_minutes = remaining / rate_per_minute if rate_per_minute > 0 else float("inf")
+        eta_text = f"{eta_minutes:.1f}m" if eta_minutes != float("inf") else "unknown"
+        statuses = ", ".join(f"{key}:{value}" for key, value in status_counts.most_common(6))
+        statuses = statuses or "none"
+        print(
+            f"{label}: progress {completed}/{total} ok, "
+            f"retryable={transient_failures}, permanent={permanent_failures}, "
+            f"statuses={statuses}, cache_rows={len(cache) + len(records)}, "
+            f"speed={rate_per_minute:.0f}/min, eta={eta_text}",
+            flush=True,
+        )
+        last_heartbeat_at = now
 
     while pending:
         round_index += 1
@@ -148,46 +177,76 @@ def run_fetch_pool(
         retry_queue: list[tuple[int, Any]] = []
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(fetch_one, task): (task_index, task)
-                for task_index, task in pending
-            }
-            for future in as_completed(futures):
-                task_index, task = futures[future]
-                try:
-                    records.append(future.result())
-                    completed += 1
-                except Exception as exc:
-                    attempts[task_index] += 1
-                    if is_retryable_error(exc) and attempts[task_index] < max_task_attempts:
-                        retry_queue.append((task_index, task))
-                    else:
-                        permanent_failures += 1
-                        print(
-                            f"{label}: task failed permanently after {attempts[task_index]} attempt(s): {exc}"
-                        )
-                if len(records) >= flush_every:
-                    cache = append_cache(cache, records, columns, key_columns)
-                    save_cache(cache_path, cache)
-                    records.clear()
-                    print(f"{label}: fetched {completed}/{total}")
+            futures: dict[Any, tuple[int, Any]] = {}
+            pending_index = 0
+
+            def submit_available() -> None:
+                nonlocal pending_index
+                while len(futures) < worker_count and pending_index < len(pending):
+                    task_index, task = pending[pending_index]
+                    pending_index += 1
+                    futures[executor.submit(fetch_one, task)] = (task_index, task)
+
+            submit_available()
+            while futures:
+                done, _ = wait(
+                    futures,
+                    timeout=heartbeat_seconds,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    print_progress(force=True)
+                    continue
+
+                for future in done:
+                    task_index, task = futures.pop(future)
+                    try:
+                        record = future.result()
+                        records.append(record)
+                        status_counts[str(record.get("status_code", "ok"))] += 1
+                        completed += 1
+                    except Exception as exc:
+                        attempts[task_index] += 1
+                        if is_retryable_error(exc) and attempts[task_index] < max_task_attempts:
+                            transient_failures += 1
+                            retry_queue.append((task_index, task))
+                        else:
+                            permanent_failures += 1
+                            print(
+                                f"{label}: task failed permanently after {attempts[task_index]} attempt(s): {exc}",
+                                flush=True,
+                            )
+                    now = time.monotonic()
+                    if len(records) >= flush_every or (records and now - last_save_at >= 30):
+                        cache = append_cache(cache, records, columns, key_columns)
+                        save_cache(cache_path, cache)
+                        records.clear()
+                        last_save_at = now
+                        print_progress(force=True)
+
+                submit_available()
+                print_progress()
 
         cache = append_cache(cache, records, columns, key_columns)
         save_cache(cache_path, cache)
         records.clear()
+        last_save_at = time.monotonic()
+        print_progress(force=True)
 
         if retry_queue:
             delay = min(max_retry_delay_seconds, retry_delay_seconds * (2 ** (round_index - 1)))
             print(
                 f"{label}: retrying {len(retry_queue)} transient failures in {delay:.0f}s "
-                f"(retry round {round_index + 1})"
+                f"(retry round {round_index + 1})",
+                flush=True,
             )
             time.sleep(delay)
         pending = retry_queue
 
-    print(f"{label}: fetched {completed}/{total}")
+    print_progress(force=True)
+    print(f"{label}: fetched {completed}/{total}", flush=True)
     if permanent_failures:
-        print(f"{label}: permanent failures={permanent_failures}")
+        print(f"{label}: permanent failures={permanent_failures}", flush=True)
     return cache
 
 
