@@ -37,6 +37,7 @@ MAX_VIOLIN_POINTS_PER_SPEC = 900
 VIOLIN_STRATA_COUNT = 45
 HIGH_RATING_THRESHOLD = 1800
 PERCENTILE_LIFT_QUANTILE = 0.80
+PERCENTILE_BAND_COLUMN = "_percentile_band"
 INTEGER_FORMAT = Format(precision=0, scheme=Scheme.fixed)
 RATING_FORMAT = Format(precision=1, scheme=Scheme.fixed)
 LIFT_FORMAT = Format(precision=2, scheme=Scheme.fixed)
@@ -929,6 +930,29 @@ def mode_percentile_cutoff(df: pd.DataFrame, rating_column: str) -> float | None
     return make_quantile(active_mode_ratings(df, rating_column), PERCENTILE_LIFT_QUANTILE)
 
 
+def percentile_band_series(df: pd.DataFrame, rating_column: str) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype="object", index=df.index)
+
+    sort_columns = [rating_column]
+    ascending = [True]
+    if "player_key" in df.columns:
+        sort_columns.append("player_key")
+        ascending.append(True)
+
+    sorted_index = df.sort_values(sort_columns, ascending=ascending, kind="mergesort").index
+    fractions = pd.Series(
+        range(len(sorted_index)),
+        index=sorted_index,
+        dtype="float64",
+    ) / len(sorted_index)
+    bands = pd.Series("p80", index=df.index, dtype="object")
+    bands.loc[fractions < 0.8] = "p50_p80"
+    bands.loc[fractions < 0.5] = "p20_p50"
+    bands.loc[fractions < 0.2] = "p20"
+    return bands
+
+
 def blizzard_mode_rating_floor(df: pd.DataFrame, rating_column: str) -> int | None:
     if df.empty:
         return None
@@ -956,8 +980,8 @@ def make_p80_lift_tooltip() -> str:
     cutoff_text = ", ".join(cutoffs) if cutoffs else "no active ratings yet"
     return (
         "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
-        "The cutoff is the 80th percentile rating among active characters "
-        f"(rating > 0) in the same game mode and region. Current Both cutoffs: {cutoff_text}."
+        "The P80+ band is the rank-based top 20% of active characters "
+        f"(rating > 0) in the same game mode and region. Current Both boundary ratings: {cutoff_text}."
     )
 
 
@@ -986,6 +1010,9 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
         mode_specs = df["spec_name"].astype(str)
         base_specs = DATA.loc[df.index, "spec_name"].astype(str)
         df["spec_name"] = mode_specs.where(mode_specs.ne(""), base_specs).astype("category")
+    df["class_name"] = df["class_name"].fillna("").astype(str)
+    df["spec_name"] = df["spec_name"].fillna("").astype(str)
+    df = df[df["class_name"].ne("") & df["spec_name"].ne("")].copy()
     if mode in BLIZZARD_GAME_MODES:
         rating_floor = blizzard_mode_rating_floor(df, rating_column)
         if rating_floor is not None:
@@ -1008,27 +1035,22 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     if not total_players:
         return pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
 
+    df = df.copy()
+    df[PERCENTILE_BAND_COLUMN] = percentile_band_series(df, rating_column)
     p20_cutoff = make_quantile(df[rating_column], 0.2)
     p50_cutoff = make_quantile(df[rating_column], 0.5)
     p80_cutoff = make_quantile(df[rating_column], 0.8)
-    total_p80_plus = int((df[rating_column] >= p80_cutoff).sum()) if p80_cutoff is not None else 0
+    total_p80_plus = int(df[PERCENTILE_BAND_COLUMN].eq("p80").sum()) if p80_cutoff is not None else 0
     rows: list[dict[str, Any]] = []
 
     for (class_name, spec_name), group in df.groupby(["class_name", "spec_name"], dropna=False):
         ratings = group[rating_column]
+        percentile_bands = group[PERCENTILE_BAND_COLUMN]
         total = int(len(group))
-        n_p20 = int((ratings < p20_cutoff).sum()) if p20_cutoff is not None else 0
-        n_p20_p50 = (
-            int(((ratings >= p20_cutoff) & (ratings < p50_cutoff)).sum())
-            if p20_cutoff is not None and p50_cutoff is not None
-            else 0
-        )
-        n_p50_p80 = (
-            int(((ratings >= p50_cutoff) & (ratings < p80_cutoff)).sum())
-            if p50_cutoff is not None and p80_cutoff is not None
-            else 0
-        )
-        n_p80 = int((ratings >= p80_cutoff).sum()) if p80_cutoff is not None else 0
+        n_p20 = int(percentile_bands.eq("p20").sum()) if p20_cutoff is not None else 0
+        n_p20_p50 = int(percentile_bands.eq("p20_p50").sum()) if p50_cutoff is not None else 0
+        n_p50_p80 = int(percentile_bands.eq("p50_p80").sum()) if p80_cutoff is not None else 0
+        n_p80 = int(percentile_bands.eq("p80").sum()) if p80_cutoff is not None else 0
         high_ratings = ratings[ratings >= HIGH_RATING_THRESHOLD]
 
         overall_spec_share = total / total_players if total_players else None
