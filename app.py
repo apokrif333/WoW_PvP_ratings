@@ -33,6 +33,7 @@ GAME_MODE_COLUMNS = {
 BLIZZARD_GAME_MODES = {"Shuffle", "Blitz BG"}
 PAGE_SIZE_OPTIONS = [{"label": str(value), "value": value} for value in (10, 20, 50, 100)]
 MAX_DYNAMIC_OPTIONS = 500
+MIN_VIOLIN_PLAYERS_PER_SPEC = 100
 MAX_VIOLIN_POINTS_PER_SPEC = 900
 VIOLIN_STRATA_COUNT = 45
 HIGH_RATING_THRESHOLD = 1800
@@ -1355,6 +1356,11 @@ def prepare_violin_chart_data(mode: str, region_filter: str) -> pd.DataFrame:
     df = mode_summary_source(mode, rating_column)
     if region_filter != "Both":
         df = df[df["region"] == region_filter.lower()]
+    if df.empty:
+        return df.rename(columns={rating_column: "rating"})
+
+    group_sizes = df.groupby(["class_name", "spec_name"], observed=True)[rating_column].transform("size")
+    df = df[group_sizes >= MIN_VIOLIN_PLAYERS_PER_SPEC].copy()
     return df.rename(columns={rating_column: "rating"})
 
 
@@ -1397,7 +1403,10 @@ def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[h
     df = prepare_violin_chart_data(mode, region_filter)
     if df.empty:
         return (
-            empty_chart("Rating distribution by spec", "No active ratings for selected filters."),
+            empty_chart(
+                "Rating distribution by spec",
+                f"No specs with at least {MIN_VIOLIN_PLAYERS_PER_SPEC} observations.",
+            ),
             [],
         )
 
