@@ -42,6 +42,7 @@ TEXT_COLUMNS = {
     "blitz_spec_name",
 }
 INTEGER_COLUMNS = set(PLAYER_COLUMNS) - TEXT_COLUMNS
+TEXT_PLAYER_COLUMNS = [column for column in PLAYER_COLUMNS if column in TEXT_COLUMNS]
 
 
 def database_url() -> str:
@@ -95,8 +96,10 @@ def write_players_to_database(df: pd.DataFrame) -> None:
         with conn.cursor() as cur:
             cur.execute("DROP TABLE IF EXISTS pvp_players_new")
             cur.execute(_players_table_sql("pvp_players_new"))
+            text_columns_sql = ", ".join(TEXT_PLAYER_COLUMNS)
             with cur.copy(
-                f"COPY pvp_players_new ({', '.join(PLAYER_COLUMNS)}) FROM STDIN WITH (FORMAT CSV)"
+                f"COPY pvp_players_new ({', '.join(PLAYER_COLUMNS)}) "
+                f"FROM STDIN WITH (FORMAT CSV, FORCE_NOT_NULL ({text_columns_sql}))"
             ) as copy:
                 copy.write(csv_buffer.getvalue())
 
