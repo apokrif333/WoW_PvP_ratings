@@ -114,10 +114,10 @@ SUMMARY_FIXED_COLUMN_IDS = [
     "game_mode",
     "region_filter",
     "total_players",
-    "n_0_1400",
-    "n_1400_1800",
-    "n_1800_2100",
-    "n_2100_plus",
+    "n_p20",
+    "n_p20_p50",
+    "n_p50_p80",
+    "n_p80",
 ]
 
 SUMMARY_COLUMNS = [
@@ -126,25 +126,24 @@ SUMMARY_COLUMNS = [
     {"name": "Game Mode", "id": "game_mode"},
     {"name": "Region", "id": "region_filter"},
     {"name": "Total Players", "id": "total_players", "type": "numeric", "format": INTEGER_FORMAT},
-    {"name": "n_0_1400", "id": "n_0_1400", "type": "numeric", "format": INTEGER_FORMAT},
-    {"name": "n_1400_1800", "id": "n_1400_1800", "type": "numeric", "format": INTEGER_FORMAT},
-    {"name": "n_1800_2100", "id": "n_1800_2100", "type": "numeric", "format": INTEGER_FORMAT},
-    {"name": "n_2100_plus", "id": "n_2100_plus", "type": "numeric", "format": INTEGER_FORMAT},
-    {"name": "pct_0_1400", "id": "pct_0_1400", "type": "numeric", "format": PERCENT_FORMAT},
-    {"name": "pct_1400_1800", "id": "pct_1400_1800", "type": "numeric", "format": PERCENT_FORMAT},
-    {"name": "pct_1800_2100", "id": "pct_1800_2100", "type": "numeric", "format": PERCENT_FORMAT},
-    {"name": "pct_2100_plus", "id": "pct_2100_plus", "type": "numeric", "format": PERCENT_FORMAT},
+    {"name": "n_p20", "id": "n_p20", "type": "numeric", "format": INTEGER_FORMAT},
+    {"name": "n_p20_p50", "id": "n_p20_p50", "type": "numeric", "format": INTEGER_FORMAT},
+    {"name": "n_p50_p80", "id": "n_p50_p80", "type": "numeric", "format": INTEGER_FORMAT},
+    {"name": "n_p80", "id": "n_p80", "type": "numeric", "format": INTEGER_FORMAT},
+    {"name": "pct_p20", "id": "pct_p20", "type": "numeric", "format": PERCENT_FORMAT},
+    {"name": "pct_p20_p50", "id": "pct_p20_p50", "type": "numeric", "format": PERCENT_FORMAT},
+    {"name": "pct_p50_p80", "id": "pct_p50_p80", "type": "numeric", "format": PERCENT_FORMAT},
+    {"name": "pct_p80", "id": "pct_p80", "type": "numeric", "format": PERCENT_FORMAT},
     {"name": "mean_rating_all", "id": "mean_rating_all", "type": "numeric", "format": RATING_FORMAT},
     {"name": "median_rating_all", "id": "median_rating_all", "type": "numeric", "format": RATING_FORMAT},
-    {"name": "q20_rating_all", "id": "q20_rating_all", "type": "numeric", "format": RATING_FORMAT},
-    {"name": "q80_rating_all", "id": "q80_rating_all", "type": "numeric", "format": RATING_FORMAT},
+    {"name": "p20_rating_all", "id": "p20_rating_all", "type": "numeric", "format": RATING_FORMAT},
+    {"name": "p80_rating_all", "id": "p80_rating_all", "type": "numeric", "format": RATING_FORMAT},
     {"name": "mean_rating_1800_plus", "id": "mean_rating_1800_plus", "type": "numeric", "format": RATING_FORMAT},
     {"name": "median_rating_1800_plus", "id": "median_rating_1800_plus", "type": "numeric", "format": RATING_FORMAT},
-    {"name": "q20_rating_1800_plus", "id": "q20_rating_1800_plus", "type": "numeric", "format": RATING_FORMAT},
-    {"name": "q80_rating_1800_plus", "id": "q80_rating_1800_plus", "type": "numeric", "format": RATING_FORMAT},
+    {"name": "p20_rating_1800_plus", "id": "p20_rating_1800_plus", "type": "numeric", "format": RATING_FORMAT},
+    {"name": "p80_rating_1800_plus", "id": "p80_rating_1800_plus", "type": "numeric", "format": RATING_FORMAT},
     {"name": "overall_spec_share", "id": "overall_spec_share", "type": "numeric", "format": PERCENT_FORMAT},
-    {"name": "spec_share_1800_plus", "id": "spec_share_1800_plus", "type": "numeric", "format": PERCENT_FORMAT},
-    {"name": "lift_1800_plus", "id": "lift_1800_plus", "type": "numeric", "format": LIFT_FORMAT},
+    {"name": "spec_share_p80_plus", "id": "spec_share_p80_plus", "type": "numeric", "format": PERCENT_FORMAT},
     {"name": "lift_p80_plus", "id": "lift_p80_plus", "type": "numeric", "format": LIFT_FORMAT},
 ]
 SUMMARY_COLUMN_BY_ID = {column["id"]: column for column in SUMMARY_COLUMNS}
@@ -155,7 +154,7 @@ SUMMARY_NUMERIC_COLUMNS = [
 SUMMARY_OPTIONAL_COLUMN_IDS = [
     column_id for column_id in SUMMARY_COLUMN_IDS if column_id not in SUMMARY_FIXED_COLUMN_IDS
 ]
-SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS = ["lift_1800_plus", "lift_p80_plus"]
+SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS = ["lift_p80_plus"]
 SUMMARY_STRING_COLUMNS = ["spec_name", "class_name", "game_mode", "region_filter"]
 
 RANGE_LABELS = {
@@ -167,25 +166,24 @@ RANGE_LABELS = {
 }
 SUMMARY_RANGE_LABELS = {
     "total_players": "Total Players",
-    "n_0_1400": "n 0-1400",
-    "n_1400_1800": "n 1400-1800",
-    "n_1800_2100": "n 1800-2100",
-    "n_2100_plus": "n 2100+",
-    "pct_0_1400": "pct 0-1400",
-    "pct_1400_1800": "pct 1400-1800",
-    "pct_1800_2100": "pct 1800-2100",
-    "pct_2100_plus": "pct 2100+",
+    "n_p20": "n < P20",
+    "n_p20_p50": "n P20-P50",
+    "n_p50_p80": "n P50-P80",
+    "n_p80": "n P80+",
+    "pct_p20": "pct < P20",
+    "pct_p20_p50": "pct P20-P50",
+    "pct_p50_p80": "pct P50-P80",
+    "pct_p80": "pct P80+",
     "mean_rating_all": "Mean all",
     "median_rating_all": "Median all",
-    "q20_rating_all": "Q20 all",
-    "q80_rating_all": "Q80 all",
+    "p20_rating_all": "P20 all",
+    "p80_rating_all": "P80 all",
     "mean_rating_1800_plus": "Mean 1800+",
     "median_rating_1800_plus": "Median 1800+",
-    "q20_rating_1800_plus": "Q20 1800+",
-    "q80_rating_1800_plus": "Q80 1800+",
+    "p20_rating_1800_plus": "P20 1800+",
+    "p80_rating_1800_plus": "P80 1800+",
     "overall_spec_share": "Overall share",
-    "spec_share_1800_plus": "1800+ share",
-    "lift_1800_plus": "Lift 1800+",
+    "spec_share_p80_plus": "P80+ share",
     "lift_p80_plus": "Lift P80+",
 }
 
@@ -208,25 +206,24 @@ SUMMARY_COLUMN_TOOLTIPS = {
     "game_mode": "Игровой режим, по которому считается summary.",
     "region_filter": "Регион/срез: Both, EU или US.",
     "total_players": "total_players = COUNT(игроков спека после всех фильтров).",
-    "n_0_1400": "n_0_1400 = COUNT(rating > 0 AND rating < 1400).",
-    "n_1400_1800": "n_1400_1800 = COUNT(rating >= 1400 AND rating < 1800).",
-    "n_1800_2100": "n_1800_2100 = COUNT(rating >= 1800 AND rating < 2100).",
-    "n_2100_plus": "n_2100_plus = COUNT(rating >= 2100).",
-    "pct_0_1400": "pct_0_1400 = n_0_1400 / total_players.",
-    "pct_1400_1800": "pct_1400_1800 = n_1400_1800 / total_players.",
-    "pct_1800_2100": "pct_1800_2100 = n_1800_2100 / total_players.",
-    "pct_2100_plus": "pct_2100_plus = n_2100_plus / total_players.",
+    "n_p20": "n_p20 = COUNT(rating < P20 cutoff for the selected mode/region).",
+    "n_p20_p50": "n_p20_p50 = COUNT(rating >= P20 cutoff AND rating < P50 cutoff).",
+    "n_p50_p80": "n_p50_p80 = COUNT(rating >= P50 cutoff AND rating < P80 cutoff).",
+    "n_p80": "n_p80 = COUNT(rating >= P80 cutoff).",
+    "pct_p20": "pct_p20 = n_p20 / total_players.",
+    "pct_p20_p50": "pct_p20_p50 = n_p20_p50 / total_players.",
+    "pct_p50_p80": "pct_p50_p80 = n_p50_p80 / total_players.",
+    "pct_p80": "pct_p80 = n_p80 / total_players.",
     "mean_rating_all": "mean_rating_all = AVG(rating по всем игрокам спека).",
     "median_rating_all": "median_rating_all = MEDIAN(rating по всем игрокам спека).",
-    "q20_rating_all": "q20_rating_all = QUANTILE(rating, 0.20) по всем игрокам спека.",
-    "q80_rating_all": "q80_rating_all = QUANTILE(rating, 0.80) по всем игрокам спека.",
+    "p20_rating_all": "p20_rating_all = QUANTILE(rating, 0.20) по всем игрокам спека.",
+    "p80_rating_all": "p80_rating_all = QUANTILE(rating, 0.80) по всем игрокам спека.",
     "mean_rating_1800_plus": "mean_rating_1800_plus = AVG(rating WHERE rating >= 1800).",
     "median_rating_1800_plus": "median_rating_1800_plus = MEDIAN(rating WHERE rating >= 1800).",
-    "q20_rating_1800_plus": "q20_rating_1800_plus = QUANTILE(rating, 0.20 WHERE rating >= 1800).",
-    "q80_rating_1800_plus": "q80_rating_1800_plus = QUANTILE(rating, 0.80 WHERE rating >= 1800).",
+    "p20_rating_1800_plus": "p20_rating_1800_plus = QUANTILE(rating, 0.20 WHERE rating >= 1800).",
+    "p80_rating_1800_plus": "p80_rating_1800_plus = QUANTILE(rating, 0.80 WHERE rating >= 1800).",
     "overall_spec_share": "overall_spec_share = total_players_спека / total_players_всех_спеков.",
-    "spec_share_1800_plus": "spec_share_1800_plus = n_(rating>=1800)_спека / n_(rating>=1800)_всех_спеков.",
-    "lift_1800_plus": "lift_1800_plus = spec_share_1800_plus / overall_spec_share.",
+    "spec_share_p80_plus": "spec_share_p80_plus = n_p80_спека / n_p80_всех_спеков.",
     "lift_p80_plus": "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. P80 cutoff is calculated per game mode.",
 }
 
@@ -975,32 +972,31 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     if not total_players:
         return pd.DataFrame(columns=SUMMARY_COLUMN_IDS)
 
-    total_1800_plus = int((df[rating_column] >= HIGH_RATING_THRESHOLD).sum())
-    p80_cutoff = mode_percentile_cutoff(df, rating_column)
+    p20_cutoff = make_quantile(df[rating_column], 0.2)
+    p50_cutoff = make_quantile(df[rating_column], 0.5)
+    p80_cutoff = make_quantile(df[rating_column], 0.8)
     total_p80_plus = int((df[rating_column] >= p80_cutoff).sum()) if p80_cutoff is not None else 0
     rows: list[dict[str, Any]] = []
 
     for (class_name, spec_name), group in df.groupby(["class_name", "spec_name"], dropna=False):
         ratings = group[rating_column]
         total = int(len(group))
-        n_0_1400 = int(((ratings > 0) & (ratings < 1400)).sum())
-        n_1400_1800 = int(((ratings >= 1400) & (ratings < 1800)).sum())
-        n_1800_2100 = int(((ratings >= 1800) & (ratings < 2100)).sum())
+        n_p20 = int((ratings < p20_cutoff).sum()) if p20_cutoff is not None else 0
+        n_p20_p50 = (
+            int(((ratings >= p20_cutoff) & (ratings < p50_cutoff)).sum())
+            if p20_cutoff is not None and p50_cutoff is not None
+            else 0
+        )
+        n_p50_p80 = (
+            int(((ratings >= p50_cutoff) & (ratings < p80_cutoff)).sum())
+            if p50_cutoff is not None and p80_cutoff is not None
+            else 0
+        )
+        n_p80 = int((ratings >= p80_cutoff).sum()) if p80_cutoff is not None else 0
         high_ratings = ratings[ratings >= HIGH_RATING_THRESHOLD]
-        n_1800_plus = int(len(high_ratings))
-        n_true_2100_plus = int((ratings >= 2100).sum())
-        n_p80_plus = int((ratings >= p80_cutoff).sum()) if p80_cutoff is not None else 0
 
         overall_spec_share = total / total_players if total_players else None
-        spec_share_1800_plus = (
-            n_1800_plus / total_1800_plus if total_1800_plus else None
-        )
-        spec_share_p80_plus = n_p80_plus / total_p80_plus if total_p80_plus else None
-        lift_1800_plus = (
-            spec_share_1800_plus / overall_spec_share
-            if spec_share_1800_plus is not None and overall_spec_share
-            else None
-        )
+        spec_share_p80_plus = n_p80 / total_p80_plus if total_p80_plus else None
         lift_p80_plus = (
             spec_share_p80_plus / overall_spec_share
             if spec_share_p80_plus is not None and overall_spec_share
@@ -1014,29 +1010,24 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
                 "game_mode": mode,
                 "region_filter": region_label,
                 "total_players": total,
-                "n_0_1400": n_0_1400,
-                "n_1400_1800": n_1400_1800,
-                "n_1800_2100": n_1800_2100,
-                "n_2100_plus": n_true_2100_plus,
-                "pct_0_1400": make_ratio(n_0_1400, total, 4),
-                "pct_1400_1800": make_ratio(n_1400_1800, total, 4),
-                "pct_1800_2100": make_ratio(n_1800_2100, total, 4),
-                "pct_2100_plus": make_ratio(n_true_2100_plus, total, 4),
+                "n_p20": n_p20,
+                "n_p20_p50": n_p20_p50,
+                "n_p50_p80": n_p50_p80,
+                "n_p80": n_p80,
+                "pct_p20": make_ratio(n_p20, total, 4),
+                "pct_p20_p50": make_ratio(n_p20_p50, total, 4),
+                "pct_p50_p80": make_ratio(n_p50_p80, total, 4),
+                "pct_p80": make_ratio(n_p80, total, 4),
                 "mean_rating_all": make_mean(ratings),
                 "median_rating_all": make_quantile(ratings, 0.5),
-                "q20_rating_all": make_quantile(ratings, 0.2),
-                "q80_rating_all": make_quantile(ratings, 0.8),
+                "p20_rating_all": make_quantile(ratings, 0.2),
+                "p80_rating_all": make_quantile(ratings, 0.8),
                 "mean_rating_1800_plus": make_mean(high_ratings),
                 "median_rating_1800_plus": make_quantile(high_ratings, 0.5),
-                "q20_rating_1800_plus": make_quantile(high_ratings, 0.2),
-                "q80_rating_1800_plus": make_quantile(high_ratings, 0.8),
+                "p20_rating_1800_plus": make_quantile(high_ratings, 0.2),
+                "p80_rating_1800_plus": make_quantile(high_ratings, 0.8),
                 "overall_spec_share": make_ratio(total, total_players, 6),
-                "spec_share_1800_plus": (
-                    make_ratio(n_1800_plus, total_1800_plus, 6)
-                    if total_1800_plus
-                    else None
-                ),
-                "lift_1800_plus": round(lift_1800_plus, 4) if lift_1800_plus is not None else None,
+                "spec_share_p80_plus": make_ratio(n_p80, total_p80_plus, 6) if total_p80_plus else None,
                 "lift_p80_plus": round(lift_p80_plus, 4) if lift_p80_plus is not None else None,
             }
         )
@@ -1211,7 +1202,8 @@ def make_lift_figure(
     lift_column: str,
 ) -> tuple[go.Figure, list[html.Img]]:
     go = plotly_go()
-    lift_label = "Lift 1800+" if lift_column == "lift_1800_plus" else "Lift P80+"
+    lift_column = lift_column if lift_column == "lift_p80_plus" else "lift_p80_plus"
+    lift_label = "Lift P80+"
     df = prepare_lift_chart_data(mode, region_filter, lift_column)
     if df.empty:
         return (
@@ -1359,7 +1351,12 @@ def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[h
         ticktext=[""] * len(order),
         title="",
     )
-    fig.update_yaxes(rangemode="tozero")
+    rating_min = float(df["rating"].min())
+    rating_max = float(df["rating"].max())
+    if rating_min == rating_max:
+        rating_min -= 1
+        rating_max += 1
+    fig.update_yaxes(range=[rating_min, rating_max])
     return fig, icon_strip(labels, icons)
 
 
@@ -1496,7 +1493,9 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     """
     ### Spec Summary: что показывает вторая таблица
 
-    Summary агрегирует персонажей по связке **Class + Spec + Game Mode + Region**. Она отвечает не на вопрос "кто конкретно играет", а на вопрос **как распределены спеки в режиме и насколько часто конкретный спек встречается среди сильных игроков**.
+    Summary агрегирует активных персонажей по связке **Class + Spec + Game Mode + Region**. Она отвечает не на вопрос "кто конкретно играет", а на вопрос **как распределены спеки в режиме и насколько часто конкретный спек встречается в верхней части рейтинга**.
+
+    В summary попадают только активные значения выбранного режима: `rating > 0`. Для Shuffle и Blitz BG дополнительно используется обрезка нижнего края ladder-данных Blizzard, чтобы сравнение между спеками не ломалось из-за лимита API.
 
     **Как пользоваться**
 
@@ -1511,45 +1510,36 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     - `Spec`, `Class` - специализация и класс, по которым сделана агрегация.
     - `Game Mode` - режим, рейтинг которого используется в расчетах.
     - `Region` - срез региона: Both, EU или US.
-    - `Total Players` - количество персонажей этого спека в выбранном режиме/регионе.
-    - `n_0_1400`, `n_1400_1800`, `n_1800_2100`, `n_2100_plus` - сколько персонажей спека попало в каждый рейтинговый диапазон.
+    - `Total Players` - количество активных персонажей этого спека в выбранном режиме/регионе.
+    - `n_p20`, `n_p20_p50`, `n_p50_p80`, `n_p80` - сколько персонажей спека попало в диапазоны `<P20`, `>=P20 & <P50`, `>=P50 & <P80`, `>=P80`.
+
+    Пороги `P20`, `P50` и `P80` считаются по всей активной выборке выбранного режима и региона, а не отдельно внутри спека.
 
     **Процентные колонки**
 
-    - `pct_0_1400 = n_0_1400 / total_players`.
-    - `pct_1400_1800 = n_1400_1800 / total_players`.
-    - `pct_1800_2100 = n_1800_2100 / total_players`.
-    - `pct_2100_plus = n_2100_plus / total_players`.
+    - `pct_p20 = n_p20 / total_players`.
+    - `pct_p20_p50 = n_p20_p50 / total_players`.
+    - `pct_p50_p80 = n_p50_p80 / total_players`.
+    - `pct_p80 = n_p80 / total_players`.
 
-    Эти колонки показывают внутреннюю структуру спека. Например, если у спека высокий `pct_2100_plus`, значит заметная часть его игроков находится в верхнем диапазоне рейтинга.
+    Эти колонки показывают внутреннюю структуру спека относительно распределения всего режима. Например, высокий `pct_p80` значит, что заметная часть игроков спека находится в верхних 20% выбранного режима.
 
     **Средние и процентили**
 
     - `mean_rating_all` - средний рейтинг всех персонажей спека.
     - `median_rating_all` - медиана рейтинга всех персонажей спека.
-    - `q20_rating_all` и `q80_rating_all` - 20-й и 80-й процентили рейтинга всех персонажей спека.
-    - `mean_rating_1800_plus`, `median_rating_1800_plus`, `q20_rating_1800_plus`, `q80_rating_1800_plus` - те же метрики, но только среди персонажей с рейтингом `>= 1800`.
+    - `p20_rating_all` и `p80_rating_all` - 20-й и 80-й процентили рейтинга всех персонажей спека.
+    - `mean_rating_1800_plus`, `median_rating_1800_plus`, `p20_rating_1800_plus`, `p80_rating_1800_plus` - те же метрики, но только среди персонажей с рейтингом `>= 1800`.
 
-    Процентили полезнее среднего, когда распределение неровное. Например, один очень высокий игрок может поднять среднее, но медиана и q80 лучше показывают типичный верхний уровень спека.
+    Процентили полезнее среднего, когда распределение неровное. Например, один очень высокий игрок может поднять среднее, но медиана и p80 лучше показывают типичный верхний уровень спека.
 
     **Доли и lift**
 
     - `overall_spec_share = total_players_спека / total_players_всех_спеков`.
-    - `spec_share_1800_plus = players_спека_с_rating>=1800 / players_всех_спеков_с_rating>=1800`.
-    - `lift_1800_plus = spec_share_1800_plus / overall_spec_share`.
+    - `spec_share_p80_plus = players_спека_с_rating>=P80 / players_всех_спеков_с_rating>=P80`.
+    - `lift_p80_plus = spec_share_p80_plus / overall_spec_share`.
 
-    Если `lift_1800_plus = 1.00`, спек представлен среди 1800+ примерно так же, как в общей популяции. Если `lift_1800_plus = 1.50`, спек встречается среди 1800+ на 50% чаще, чем ожидалось по его общей доле. Если `0.70`, спек недопредставлен.
-
-    **Mode-specific P80 lift**
-
-    `lift_p80_plus` похож на `lift_1800_plus`, но порог считается отдельно для каждого режима как **80-й процентиль рейтинга всех активных персонажей режима**. Это важно, потому что распределения в Shuffle, Blitz, 2v2, 3v3 и RBG разные. Один фиксированный порог `1800` может быть слишком мягким для одного режима и слишком жестким для другого.
-
-    Расчет:
-
-    - Берем всех активных персонажей режима с `rating > 0`.
-    - Считаем 80-й процентиль рейтинга этого режима.
-    - Считаем долю спека среди персонажей выше этого порога.
-    - Делим ее на долю спека среди всех активных персонажей режима.
+    Если `lift_p80_plus = 1.00`, спек представлен в верхних 20% примерно так же, как в общей популяции. Если `lift_p80_plus = 1.50`, спек встречается в верхних 20% на 50% чаще, чем ожидалось по его общей доле. Если `0.70`, спек недопредставлен.
 
     **Какой вывод делать из lift**
 
@@ -1557,7 +1547,7 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     - `lift около 1` - спек представлен примерно нейтрально.
     - `lift < 1` - спек реже доходит до верхнего сегмента, чем ожидалось по численности. Это может указывать на сложность спека, слабую мету, низкую популярность среди сильных игроков или специфику режима.
 
-    Важно: lift не доказывает баланс сам по себе. Он показывает **представленность**, а не прямую причинность. Для надежного вывода смотри одновременно `Total Players`, `pct_2100_plus`, `q80_rating_all`, `lift_1800_plus` и `lift_p80_plus`.
+    Важно: lift не доказывает баланс сам по себе. Он показывает **представленность**, а не прямую причинность. Для надежного вывода смотри одновременно `Total Players`, `pct_p80`, `p80_rating_all`, `spec_share_p80_plus` и `lift_p80_plus`.
     """
 ).strip()
 
@@ -1566,7 +1556,9 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     """
     ### Spec Summary: what the second table shows
 
-    The summary table aggregates active characters by **Class + Spec + Game Mode + Region**. Active means the character has `rating > 0` in the selected mode. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears among stronger players**.
+    The summary table aggregates active characters by **Class + Spec + Game Mode + Region**. Active means the character has `rating > 0` in the selected mode. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears in the upper rating bands**.
+
+    For Shuffle and Blitz BG, the lower edge of Blizzard ladder data is trimmed before this summary is calculated, so high-population and low-population specs are compared on the same visible ladder floor.
 
     **How to use it**
 
@@ -1582,44 +1574,35 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     - `Game Mode` - the mode whose rating is being analyzed.
     - `Region` - Both, EU, or US.
     - `Total Players` - number of active characters of that spec in the selected mode/region.
-    - `n_0_1400`, `n_1400_1800`, `n_1800_2100`, `n_2100_plus` - counts of spec players in each rating band.
+    - `n_p20`, `n_p20_p50`, `n_p50_p80`, `n_p80` - counts of spec players in `<P20`, `>=P20 & <P50`, `>=P50 & <P80`, and `>=P80`.
+
+    The `P20`, `P50`, and `P80` cutoffs are calculated across the full active selected mode/region sample, not separately inside each spec.
 
     **Percentage columns**
 
-    - `pct_0_1400 = n_0_1400 / total_players`.
-    - `pct_1400_1800 = n_1400_1800 / total_players`.
-    - `pct_1800_2100 = n_1800_2100 / total_players`.
-    - `pct_2100_plus = n_2100_plus / total_players`.
+    - `pct_p20 = n_p20 / total_players`.
+    - `pct_p20_p50 = n_p20_p50 / total_players`.
+    - `pct_p50_p80 = n_p50_p80 / total_players`.
+    - `pct_p80 = n_p80 / total_players`.
 
-    These columns describe the internal rating structure of a spec. For example, a high `pct_2100_plus` means a meaningful share of that spec's players sit in the upper rating band.
+    These columns describe the spec's internal rating structure relative to the whole mode distribution. For example, a high `pct_p80` means a meaningful share of that spec's players sit in the top 20% of the selected mode.
 
     **Averages and percentiles**
 
     - `mean_rating_all` - average rating of all characters of the spec.
     - `median_rating_all` - median rating of all characters of the spec.
-    - `q20_rating_all` and `q80_rating_all` - 20th and 80th rating percentiles for the spec.
-    - `mean_rating_1800_plus`, `median_rating_1800_plus`, `q20_rating_1800_plus`, `q80_rating_1800_plus` - the same metrics, but only for characters with rating `>= 1800`.
+    - `p20_rating_all` and `p80_rating_all` - 20th and 80th rating percentiles for the spec.
+    - `mean_rating_1800_plus`, `median_rating_1800_plus`, `p20_rating_1800_plus`, `p80_rating_1800_plus` - the same metrics, but only for characters with rating `>= 1800`.
 
-    Percentiles are often more stable than the mean when distributions are uneven. One extreme player can pull the average up, while median and q80 better describe the typical upper range of a spec.
+    Percentiles are often more stable than the mean when distributions are uneven. One extreme player can pull the average up, while median and p80 better describe the typical upper range of a spec.
 
     **Shares and lift**
 
     - `overall_spec_share = spec_total_players / all_specs_total_players`.
-    - `spec_share_1800_plus = spec_players_rating>=1800 / all_specs_players_rating>=1800`.
-    - `lift_1800_plus = spec_share_1800_plus / overall_spec_share`.
+    - `spec_share_p80_plus = spec_players_rating>=P80 / all_specs_players_rating>=P80`.
+    - `lift_p80_plus = spec_share_p80_plus / overall_spec_share`.
 
-    If `lift_1800_plus = 1.00`, the spec is represented among 1800+ players roughly as often as expected from its overall population share. If `lift_1800_plus = 1.50`, the spec appears among 1800+ players 50% more often than expected. If it is `0.70`, the spec is underrepresented.
-
-    **Mode-specific P80 lift**
-
-    `lift_p80_plus` is similar to `lift_1800_plus`, but the cutoff is calculated separately for each mode as the **80th percentile rating of all active characters in that mode**. This matters because Shuffle, Blitz, 2v2, 3v3, and RBG have different rating distributions. A fixed `1800` cutoff can be too easy in one mode and too strict in another.
-
-    Calculation:
-
-    - Take all active characters in the mode with `rating > 0`.
-    - Calculate the mode's 80th percentile rating.
-    - Calculate the spec's share among characters at or above that cutoff.
-    - Divide it by the spec's share among all active characters in that mode.
+    If `lift_p80_plus = 1.00`, the spec is represented in the top 20% roughly as often as expected from its overall population share. If `lift_p80_plus = 1.50`, the spec appears in the top 20% 50% more often than expected. If it is `0.70`, the spec is underrepresented.
 
     **How to interpret lift**
 
@@ -1627,7 +1610,7 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     - `lift around 1` - neutral representation.
     - `lift < 1` - the spec reaches the upper segment less often than expected from its population size. This can point to difficulty, weaker meta position, lower adoption by strong players, or mode-specific limitations.
 
-    Lift does not prove balance by itself. It measures **representation**, not direct causality. For stronger conclusions, look at `Total Players`, `pct_2100_plus`, `q80_rating_all`, `lift_1800_plus`, and `lift_p80_plus` together.
+    Lift does not prove balance by itself. It measures **representation**, not direct causality. For stronger conclusions, look at `Total Players`, `pct_p80`, `p80_rating_all`, `spec_share_p80_plus`, and `lift_p80_plus` together.
     """
 ).strip()
 
@@ -1636,11 +1619,9 @@ CHARTS_GUIDE_EN = dedent(
     """
     ### Charts: how to read them
 
-    The first chart ranks specs from the highest lift to the lowest for one game mode and region. `Lift P80+ = 1.89` for Discipline Priest in Shuffle means this spec appears in the top 20% of active Shuffle ratings about **1.89 times more often** than its overall active population share would predict. In plain language: Discipline Priest is overrepresented among high-rated Shuffle characters. That can mean the spec is strong, efficient, easier to convert into rating, popular among stronger players, or a mix of those things. It is a signal, not proof of balance by itself.
+    The first chart ranks specs from the highest `Lift P80+` to the lowest for one game mode and region. `Lift P80+ = 1.89` for Discipline Priest in Shuffle means this spec appears in the top 20% of active Shuffle ratings about **1.89 times more often** than its overall active population share would predict. It is a representation signal, not proof of balance by itself.
 
-    `Lift 1800+` uses a fixed 1800 rating cutoff. `Lift P80+` uses the top 20% cutoff for the selected mode, which is usually fairer when different modes have different rating inflation.
-
-    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. The thin tails can extend slightly beyond the observed minimum or maximum because the violin is a smoothed estimate of the distribution, not a raw bar chart. To keep the free deployment responsive, very large specs are drawn from a stable stratified sample across the rating distribution, while the table metrics use the full dataset.
+    The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. To keep the free deployment responsive, very large specs are drawn from a stable stratified sample across the rating distribution, while the table metrics use the full dataset.
     """
 ).strip()
 
@@ -1649,11 +1630,9 @@ CHARTS_GUIDE_RU = dedent(
     """
     ### Графики: как их читать
 
-    Первый график ранжирует спеки от самого высокого lift к самому низкому для выбранного режима и региона. Если у Discipline Priest в Shuffle `Lift P80+ = 1.89`, это значит, что этот спек встречается в верхних 20% активных Shuffle-рейтингов примерно в **1.89 раза чаще**, чем ожидалось бы по его обычной доле среди активных игроков. Проще: Discipline Priest заметно чаще доходит до высоких рейтингов. Это может говорить о силе спека, эффективности, более лёгком наборе рейтинга, популярности среди сильных игроков или сочетании этих причин. Сам по себе lift не доказывает баланс, но даёт хороший сигнал.
+    Первый график ранжирует спеки от самого высокого `Lift P80+` к самому низкому для выбранного режима и региона. Если у Discipline Priest в Shuffle `Lift P80+ = 1.89`, это значит, что этот спек встречается в верхних 20% активных Shuffle-рейтингов примерно в **1.89 раза чаще**, чем ожидалось бы по его обычной доле среди активных игроков. Это сигнал представленности, а не доказательство баланса само по себе.
 
-    `Lift 1800+` использует фиксированный порог 1800 рейтинга. `Lift P80+` использует верхние 20% выбранного режима, поэтому он обычно честнее для сравнения режимов с разной инфляцией рейтинга.
-
-    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Тонкие хвосты могут немного выходить выше или ниже реального минимума/максимума выборки, потому что violin - это сглаженная оценка распределения, а не сырые столбики. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной стратифицированной выборке по всему распределению рейтинга, а метрики в таблице считаются по полному датасету.
+    Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной стратифицированной выборке по всему распределению рейтинга, а метрики в таблице считаются по полному датасету.
     """
 ).strip()
 
@@ -1663,7 +1642,7 @@ def make_info_tabs(
     russian_text: str,
     english_text: str,
     summary: str = "Description",
-    open_panel: bool = True,
+    open_panel: bool = False,
 ) -> html.Details:
     return html.Details(
         className="info-panel",
@@ -1703,10 +1682,7 @@ def make_charts_page() -> html.Div:
         {"label": "EU", "value": "EU"},
         {"label": "US", "value": "US"},
     ]
-    lift_options = [
-        {"label": "1800+", "value": "lift_1800_plus"},
-        {"label": "P80+", "value": "lift_p80_plus"},
-    ]
+    lift_options = [{"label": "P80+", "value": "lift_p80_plus"}]
     graph_config = {"displaylogo": False, "responsive": True}
 
     return html.Div(
@@ -1750,7 +1726,7 @@ def make_charts_page() -> html.Div:
                                 "lift-chart-type",
                                 "Lift",
                                 lift_options,
-                                "lift_1800_plus",
+                                "lift_p80_plus",
                             ),
                         ],
                     ),
@@ -2212,7 +2188,7 @@ def update_lift_chart(
     refresh_application_data_if_changed()
     mode = mode or "Shuffle"
     region_filter = region_filter or "Both"
-    lift_column = lift_column or "lift_1800_plus"
+    lift_column = lift_column or "lift_p80_plus"
     return make_lift_figure(mode, region_filter, lift_column)
 
 
