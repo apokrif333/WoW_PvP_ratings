@@ -254,6 +254,7 @@ TABLE_STYLE_HEADER = {
     "color": "#f0b400",
     "fontWeight": "700",
     "border": "1px solid #f0b400",
+    "textAlign": "left",
 }
 TABLE_STYLE_DATA_CONDITIONAL = [
     {"if": {"row_index": "odd"}, "backgroundColor": "#34271d"},
@@ -1351,7 +1352,7 @@ def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[h
         ticktext=[""] * len(order),
         title="",
     )
-    rating_min = float(df["rating"].min())
+    rating_min = float(df["rating"].min()) - 100
     rating_max = float(df["rating"].max())
     if rating_min == rating_max:
         rating_min -= 1
@@ -1993,8 +1994,14 @@ def layout() -> html.Div:
                 sort_by=[],
                 sort_mode="single",
                 fixed_rows={"headers": True},
+                fixed_columns={"headers": True, "data": 3},
                 style_as_list_view=True,
-                style_table={"height": "520px", "overflowX": "auto", "overflowY": "auto"},
+                style_table={
+                    "height": "520px",
+                    "overflowX": "auto",
+                    "overflowY": "auto",
+                    "minWidth": "100%",
+                },
                 style_cell={**TABLE_STYLE_CELL, "minWidth": "116px", "maxWidth": "240px"},
                 style_cell_conditional=SUMMARY_STYLE_CELL_CONDITIONAL,
                 style_header=TABLE_STYLE_HEADER,
