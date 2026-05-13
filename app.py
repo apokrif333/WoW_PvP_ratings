@@ -1247,79 +1247,6 @@ def empty_chart(title: str, message: str) -> go.Figure:
     return fig
 
 
-def prepare_lift_chart_data(mode: str, region_filter: str, lift_column: str) -> pd.DataFrame:
-    df = make_summary_cached([mode], [region_filter]).copy()
-    if df.empty or lift_column not in df:
-        return pd.DataFrame()
-    df = df[df[lift_column].notna()]
-    if df.empty:
-        return df
-    df["label"] = [
-        spec_label(class_name, spec_name)
-        for class_name, spec_name in zip(df["class_name"], df["spec_name"])
-    ]
-    df["icon_src"] = [
-        spec_icon_src(class_name, spec_name)
-        for class_name, spec_name in zip(df["class_name"], df["spec_name"])
-    ]
-    return df.sort_values(lift_column, ascending=False, kind="mergesort").reset_index(drop=True)
-
-
-def make_lift_figure(
-    mode: str,
-    region_filter: str,
-    lift_column: str,
-) -> tuple[go.Figure, list[html.Img]]:
-    go = plotly_go()
-    lift_column = lift_column if lift_column == "lift_p80_plus" else "lift_p80_plus"
-    lift_label = "Lift P80+"
-    df = prepare_lift_chart_data(mode, region_filter, lift_column)
-    if df.empty:
-        return (
-            empty_chart(f"{lift_label} by spec", "No lift data for selected filters."),
-            [],
-        )
-
-    positions = list(range(len(df)))
-    labels = df["label"].tolist()
-    icons = df["icon_src"].tolist()
-    colors = [class_color(class_name) for class_name in df["class_name"]]
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=positions,
-                y=df[lift_column],
-                marker={"color": colors, "line": {"color": "#f0b400", "width": 0.8}},
-                customdata=list(
-                    zip(
-                        df["class_name"],
-                        df["spec_name"],
-                        df["total_players"],
-                        df[lift_column],
-                    )
-                ),
-                hovertemplate=(
-                    "<b>%{customdata[0]} %{customdata[1]}</b><br>"
-                    "Total players: %{customdata[2]:,}<br>"
-                    f"{lift_label}: "
-                    "%{customdata[3]:.2f}<extra></extra>"
-                ),
-            )
-        ]
-    )
-    apply_plot_theme(fig, f"{mode} {region_filter} {lift_label}", lift_label)
-    fig.update_layout(images=chart_icon_images(labels, icons))
-    fig.update_xaxes(
-        range=[-0.6, len(df) - 0.4],
-        tickmode="array",
-        tickvals=positions,
-        ticktext=[""] * len(df),
-        title="",
-    )
-    fig.update_yaxes(rangemode="tozero")
-    return fig, icon_strip(labels, icons)
-
-
 def selected_game_modes(modes: list[str] | str | None) -> list[str]:
     if isinstance(modes, str):
         requested = {modes}
@@ -1807,7 +1734,9 @@ CHARTS_GUIDE_EN = dedent(
     """
     ### Charts: how to read them
 
-    The first chart ranks specs from the highest `Lift P80+` to the lowest for one game mode and region. `Lift P80+ = 1.89` for Discipline Priest in Shuffle means this spec appears in the top 20% of active Shuffle ratings about **1.89 times more often** than its overall active population share would predict. It is a representation signal, not proof of balance by itself.
+    The first chart ranks specs by any numeric metric from the Spec Summary table. You can select one game mode, several modes, or all modes; the chart then averages the selected metric across those modes for each spec in one selected region. For example, choosing only Shuffle and `Lift P80+` reproduces the old lift chart. Choosing all modes and `pct_p80` shows which specs have the highest average share of players in the top 20% across modes.
+
+    The hover shows the averaged metric, how many modes were included, and `Observations`: the summed `Total Players` used for that spec across the selected modes. This helps separate stable signals from tiny samples.
 
     The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. To keep the free deployment responsive, very large specs are drawn from a stable stratified sample across the rating distribution, while the table metrics use the full dataset.
     """
@@ -1818,7 +1747,9 @@ CHARTS_GUIDE_RU = dedent(
     """
     ### Графики: как их читать
 
-    Первый график ранжирует спеки от самого высокого `Lift P80+` к самому низкому для выбранного режима и региона. Если у Discipline Priest в Shuffle `Lift P80+ = 1.89`, это значит, что этот спек встречается в верхних 20% активных Shuffle-рейтингов примерно в **1.89 раза чаще**, чем ожидалось бы по его обычной доле среди активных игроков. Это сигнал представленности, а не доказательство баланса само по себе.
+    Первый график ранжирует спеки по любой числовой метрике из таблицы Spec Summary. Можно выбрать один режим, несколько режимов или все режимы; график усреднит выбранную метрику по этим режимам для каждого спека в одном выбранном регионе. Например, если выбрать только Shuffle и `Lift P80+`, получится старый lift-график. Если выбрать все режимы и `pct_p80`, будет видно, у каких спеков самая высокая средняя доля игроков в верхних 20% по режимам.
+
+    При наведении показывается среднее значение метрики, сколько режимов вошло в расчёт, и `Observations`: сумма `Total Players` по выбранным режимам для этого спека. Так видно, где сигнал построен на большой выборке, а где на малом числе наблюдений.
 
     Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной стратифицированной выборке по всему распределению рейтинга, а метрики в таблице считаются по полному датасету.
     """
@@ -1870,7 +1801,6 @@ def make_charts_page() -> html.Div:
         {"label": "EU", "value": "EU"},
         {"label": "US", "value": "US"},
     ]
-    lift_options = [{"label": "P80+", "value": "lift_p80_plus"}]
     average_column_options = make_column_options(SUMMARY_NUMERIC_COLUMNS)
     graph_config = {"displaylogo": False, "responsive": True}
 
@@ -1892,60 +1822,6 @@ def make_charts_page() -> html.Div:
                 CHARTS_GUIDE_RU,
                 CHARTS_GUIDE_EN,
                 "Charts description",
-            ),
-            html.Div(
-                className="chart-card",
-                children=[
-                    html.Div(
-                        className="filters chart-filters",
-                        children=[
-                            make_single_filter(
-                                "lift-chart-mode",
-                                "Game Mode",
-                                mode_options,
-                                "Shuffle",
-                            ),
-                            make_single_filter(
-                                "lift-chart-region",
-                                "Region",
-                                region_options,
-                                "Both",
-                            ),
-                            make_single_filter(
-                                "lift-chart-type",
-                                "Lift",
-                                lift_options,
-                                "lift_p80_plus",
-                            ),
-                        ],
-                    ),
-                    dcc.Graph(id="lift-chart", className="chart-graph", config=graph_config),
-                    html.Div(id="lift-chart-icons", className="chart-axis-icons"),
-                ],
-            ),
-            html.Div(
-                className="chart-card",
-                children=[
-                    html.Div(
-                        className="filters chart-filters chart-filters-two",
-                        children=[
-                            make_single_filter(
-                                "violin-chart-mode",
-                                "Game Mode",
-                                mode_options,
-                                "Shuffle",
-                            ),
-                            make_single_filter(
-                                "violin-chart-region",
-                                "Region",
-                                region_options,
-                                "Both",
-                            ),
-                        ],
-                    ),
-                    dcc.Graph(id="violin-chart", className="chart-graph", config=graph_config),
-                    html.Div(id="violin-chart-icons", className="chart-axis-icons"),
-                ],
             ),
             html.Div(
                 className="chart-card",
@@ -1976,6 +1852,30 @@ def make_charts_page() -> html.Div:
                     ),
                     dcc.Graph(id="average-chart", className="chart-graph", config=graph_config),
                     html.Div(id="average-chart-icons", className="chart-axis-icons"),
+                ],
+            ),
+            html.Div(
+                className="chart-card",
+                children=[
+                    html.Div(
+                        className="filters chart-filters chart-filters-two",
+                        children=[
+                            make_single_filter(
+                                "violin-chart-mode",
+                                "Game Mode",
+                                mode_options,
+                                "Shuffle",
+                            ),
+                            make_single_filter(
+                                "violin-chart-region",
+                                "Region",
+                                region_options,
+                                "Both",
+                            ),
+                        ],
+                    ),
+                    dcc.Graph(id="violin-chart", className="chart-graph", config=graph_config),
+                    html.Div(id="violin-chart-icons", className="chart-axis-icons"),
                 ],
             ),
         ],
@@ -2393,29 +2293,6 @@ def update_summary_rows(
         f"{len(df):,} specs",
         visible_columns,
     )
-
-
-@app.callback(
-    Output("lift-chart", "figure"),
-    Output("lift-chart-icons", "children"),
-    Input("site-tabs", "value"),
-    Input("lift-chart-mode", "value"),
-    Input("lift-chart-region", "value"),
-    Input("lift-chart-type", "value"),
-)
-def update_lift_chart(
-    active_tab: str | None,
-    mode: str | None,
-    region_filter: str | None,
-    lift_column: str | None,
-) -> tuple[go.Figure | dict, list[html.Img]]:
-    if active_tab != "charts":
-        return {}, []
-    refresh_application_data_if_changed()
-    mode = mode or "Shuffle"
-    region_filter = region_filter or "Both"
-    lift_column = lift_column or "lift_p80_plus"
-    return make_lift_figure(mode, region_filter, lift_column)
 
 
 @app.callback(
