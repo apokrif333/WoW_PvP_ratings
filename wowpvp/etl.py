@@ -6,12 +6,17 @@ import pandas as pd
 
 from wowpvp.cleaning import deduplicate_checkpvp_players
 from wowpvp.constants import CLASS_ID_TO_NAME, SPEC_ID_TO_INFO
-from wowpvp.storage import PLAYER_COLUMNS, write_players_to_database
+from wowpvp.storage import INTEGER_COLUMNS, PLAYER_COLUMNS, TEXT_COLUMNS, write_players_to_database
 from wowpvp.utils import ensure_dirs, player_key, slugify_realm
 
 
 FINAL_COLUMNS = PLAYER_COLUMNS
 BLIZZARD_MODE_PREFIXES = {"shuffle": "shuffle", "blitz": "blitz"}
+BLIZZARD_GLOBAL_RATING_COLUMNS = {
+    "2v2": "rating_2v2",
+    "3v3": "rating_3v3",
+    "rbg": "rating_rbg",
+}
 BLIZZARD_IDENTITY_COLUMNS = [
     "player_key",
     "region",
@@ -20,6 +25,28 @@ BLIZZARD_IDENTITY_COLUMNS = [
     "realm_slug",
     "class_name",
     "spec_name",
+]
+BLIZZARD_GLOBAL_IDENTITY_COLUMNS = [
+    "player_key",
+    "region",
+    "character_name",
+    "realm",
+    "realm_slug",
+]
+BLIZZARD_COLUMNS = [
+    *BLIZZARD_IDENTITY_COLUMNS,
+    "shuffle_rating",
+    "blitz_rating",
+    "shuffle_class_name",
+    "shuffle_spec_name",
+    "blitz_class_name",
+    "blitz_spec_name",
+]
+CHECKPVP_COLUMNS = [
+    *BLIZZARD_IDENTITY_COLUMNS,
+    "rating_2v2",
+    "rating_3v3",
+    "rating_rbg",
 ]
 
 
@@ -39,9 +66,13 @@ def load_raw_checkpvp(data_dir: Path) -> pd.DataFrame:
 
 def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame(columns=FINAL_COLUMNS)
+        return pd.DataFrame(columns=BLIZZARD_COLUMNS)
 
     df = df.copy()
+    df = df[df["mode"].isin(BLIZZARD_MODE_PREFIXES)].copy()
+    if df.empty:
+        return pd.DataFrame(columns=BLIZZARD_COLUMNS)
+
     df["rating"] = pd.to_numeric(df["rating"], errors="coerce").fillna(0).astype(int)
     df = (
         df.sort_values(
@@ -75,12 +106,49 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
         result[f"{prefix}_class_name"] = result["class_name"].where(has_mode_rating, "")
         result[f"{prefix}_spec_name"] = result["spec_name"].where(has_mode_rating, "")
 
-    return result
+    return result[BLIZZARD_COLUMNS]
+
+
+def prepare_blizzard_global(df: pd.DataFrame) -> pd.DataFrame:
+    columns = [*BLIZZARD_GLOBAL_IDENTITY_COLUMNS, *BLIZZARD_GLOBAL_RATING_COLUMNS.values()]
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = df.copy()
+    df = df[df["mode"].isin(BLIZZARD_GLOBAL_RATING_COLUMNS)].copy()
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df["rating"] = pd.to_numeric(df["rating"], errors="coerce").astype("Int64")
+    df = (
+        df.sort_values(
+            ["player_key", "mode", "rating"],
+            ascending=[True, True, False],
+            kind="mergesort",
+        )
+        .drop_duplicates(["player_key", "mode"], keep="first")
+        .reset_index(drop=True)
+    )
+    ratings = (
+        df.pivot_table(
+            index=BLIZZARD_GLOBAL_IDENTITY_COLUMNS,
+            columns="mode",
+            values="rating",
+            aggfunc="max",
+        )
+        .rename(columns=BLIZZARD_GLOBAL_RATING_COLUMNS)
+        .reset_index()
+    )
+    for column in BLIZZARD_GLOBAL_RATING_COLUMNS.values():
+        if column not in ratings:
+            ratings[column] = pd.NA
+        ratings[column] = pd.to_numeric(ratings[column], errors="coerce").astype("Int64")
+    return ratings[columns]
 
 
 def prepare_checkpvp(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame(columns=FINAL_COLUMNS)
+        return pd.DataFrame(columns=CHECKPVP_COLUMNS)
 
     result = deduplicate_checkpvp_players(df)
     result["region"] = result["region"].astype(str).str.lower()
@@ -145,13 +213,105 @@ def optional_series(df: pd.DataFrame, column: str, default: str | int = "") -> p
     return pd.Series([default] * len(df), index=df.index)
 
 
+def normalize_final_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    for column in FINAL_COLUMNS:
+        if column not in normalized:
+            normalized[column] = "" if column in TEXT_COLUMNS else pd.NA
+    normalized = normalized[FINAL_COLUMNS]
+    for column in TEXT_COLUMNS:
+        normalized[column] = normalized[column].fillna("").astype(str)
+    for column in INTEGER_COLUMNS:
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").astype("Int64")
+    return normalized
+
+
+def choose_global_rating_target(final: pd.DataFrame, indices: list[int]) -> int:
+    group = final.loc[indices]
+    checkpvp_columns = list(BLIZZARD_GLOBAL_RATING_COLUMNS.values())
+    has_checkpvp_rating = group[checkpvp_columns].notna().any(axis=1)
+    if has_checkpvp_rating.any():
+        return int(has_checkpvp_rating[has_checkpvp_rating].index[0])
+
+    mode_scores = (
+        group[["shuffle_rating", "blitz_rating"]]
+        .apply(lambda column: pd.to_numeric(column, errors="coerce"))
+        .max(axis=1)
+        .fillna(-1)
+    )
+    has_spec = group["class_name"].astype(str).ne("") & group["spec_name"].astype(str).ne("")
+    candidates = pd.DataFrame(
+        {
+            "has_spec": has_spec.astype(int),
+            "mode_score": mode_scores,
+        },
+        index=group.index,
+    )
+    return int(
+        candidates.sort_values(
+            ["has_spec", "mode_score"],
+            ascending=[False, False],
+            kind="mergesort",
+        ).index[0]
+    )
+
+
+def apply_blizzard_global_ratings(final: pd.DataFrame, blizzard_global: pd.DataFrame) -> pd.DataFrame:
+    if blizzard_global.empty:
+        return final
+
+    final = final.copy()
+    global_ratings = blizzard_global.copy()
+    for column in BLIZZARD_GLOBAL_RATING_COLUMNS.values():
+        global_ratings[column] = pd.to_numeric(global_ratings[column], errors="coerce").astype("Int64")
+
+    indices_by_player = {
+        str(player_key_value): list(indices)
+        for player_key_value, indices in final.groupby("player_key", sort=False).indices.items()
+    }
+    new_rows: list[dict[str, object]] = []
+
+    for row in global_ratings.itertuples(index=False):
+        row_data = row._asdict()
+        key = str(row_data["player_key"])
+        indices = indices_by_player.get(key)
+        if indices:
+            target_index = choose_global_rating_target(final, indices)
+            for column in BLIZZARD_GLOBAL_RATING_COLUMNS.values():
+                value = row_data.get(column)
+                if pd.notna(value):
+                    final.at[target_index, column] = int(value)
+            continue
+
+        new_row: dict[str, object] = {column: pd.NA for column in FINAL_COLUMNS}
+        for column in BLIZZARD_GLOBAL_IDENTITY_COLUMNS:
+            new_row[column] = row_data.get(column, "")
+        new_row["class_name"] = ""
+        new_row["spec_name"] = ""
+        new_row["shuffle_class_name"] = ""
+        new_row["shuffle_spec_name"] = ""
+        new_row["blitz_class_name"] = ""
+        new_row["blitz_spec_name"] = ""
+        for column in BLIZZARD_GLOBAL_RATING_COLUMNS.values():
+            value = row_data.get(column)
+            if pd.notna(value):
+                new_row[column] = int(value)
+        new_rows.append(new_row)
+
+    if new_rows:
+        final = pd.concat([final, pd.DataFrame(new_rows)], ignore_index=True)
+    return final
+
+
 def build_final_dataset(
     data_dir: Path,
     write_csv: bool = True,
     write_database: bool = True,
 ) -> Path:
     ensure_dirs(data_dir)
-    blizzard = prepare_blizzard(load_raw_blizzard(data_dir))
+    raw_blizzard = load_raw_blizzard(data_dir)
+    blizzard = prepare_blizzard(raw_blizzard)
+    blizzard_global = prepare_blizzard_global(raw_blizzard)
     checkpvp = prepare_checkpvp(load_raw_checkpvp(data_dir))
 
     merge_keys = ["player_key", "class_name", "spec_name"]
@@ -178,7 +338,8 @@ def build_final_dataset(
         final[f"{prefix}_class_name"] = optional_series(merged, f"{prefix}_class_name").fillna("")
         final[f"{prefix}_spec_name"] = optional_series(merged, f"{prefix}_spec_name").fillna("")
 
-    final = final[FINAL_COLUMNS].sort_values(
+    final = apply_blizzard_global_ratings(final, blizzard_global)
+    final = normalize_final_dataframe(final).sort_values(
         ["rating_3v3", "shuffle_rating", "blitz_rating", "rating_2v2", "rating_rbg"],
         ascending=False,
     )

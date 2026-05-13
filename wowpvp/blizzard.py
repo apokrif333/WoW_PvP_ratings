@@ -17,6 +17,10 @@ from wowpvp.constants import CLASS_SLUG_TO_NAME, SPEC_SLUG_TO_NAME
 from wowpvp.utils import ensure_dirs, player_key, slugify_realm
 
 
+GLOBAL_LEADERBOARD_MODES = {"2v2", "3v3", "rbg"}
+SPEC_LEADERBOARD_PREFIXES = ("shuffle-", "blitz-")
+
+
 @dataclass
 class BlizzardClient:
     client_id: str
@@ -98,13 +102,19 @@ def parse_spec_leaderboard_slug(slug: str) -> tuple[str, str, str]:
     return mode, class_name, spec_name
 
 
+def parse_leaderboard_slug(slug: str) -> tuple[str, str, str]:
+    if slug in GLOBAL_LEADERBOARD_MODES:
+        return slug, "", ""
+    return parse_spec_leaderboard_slug(slug)
+
+
 def extract_leaderboard_rows(
     region: str,
     season_id: int,
     leaderboard_slug: str,
     entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    mode, class_name, spec_name = parse_spec_leaderboard_slug(leaderboard_slug)
+    mode, class_name, spec_name = parse_leaderboard_slug(leaderboard_slug)
     rows: list[dict[str, Any]] = []
 
     for entry in entries:
@@ -137,6 +147,13 @@ def extract_leaderboard_rows(
     return rows
 
 
+def cached_blizzard_has_global_modes(df: pd.DataFrame) -> bool:
+    if "mode" not in df.columns:
+        return False
+    modes = set(df["mode"].dropna().astype(str))
+    return GLOBAL_LEADERBOARD_MODES.issubset(modes)
+
+
 def fetch_blizzard_pvp_data(
     client: BlizzardClient,
     regions: list[str],
@@ -154,18 +171,24 @@ def fetch_blizzard_pvp_data(
         meta_path = data_dir / "raw" / f"blizzard_{region}_season_{season_id}.json"
 
         if raw_path.exists() and not force:
-            print(f"Blizzard {region}: using cached {raw_path}")
-            all_rows.extend(pd.read_parquet(raw_path).to_dict("records"))
-            continue
+            cached_df = pd.read_parquet(raw_path)
+            if cached_blizzard_has_global_modes(cached_df):
+                print(f"Blizzard {region}: using cached {raw_path}")
+                all_rows.extend(cached_df.to_dict("records"))
+                continue
+            print(f"Blizzard {region}: cached {raw_path} misses 2v2/3v3/rbg, refreshing")
 
         leaderboard_index = client.get(region, f"pvp-season/{season_id}/pvp-leaderboard/index")
         leaderboards = [
             item["name"]
             for item in leaderboard_index.get("leaderboards", [])
-            if item.get("name", "").startswith(("shuffle-", "blitz-"))
+            if (
+                item.get("name", "") in GLOBAL_LEADERBOARD_MODES
+                or item.get("name", "").startswith(SPEC_LEADERBOARD_PREFIXES)
+            )
             and not item.get("name", "").endswith("-overall")
         ]
-        print(f"Blizzard {region}: season {season_id}, {len(leaderboards)} spec leaderboards")
+        print(f"Blizzard {region}: season {season_id}, {len(leaderboards)} leaderboards")
 
         region_rows: list[dict[str, Any]] = []
 

@@ -195,9 +195,9 @@ MAIN_COLUMN_TOOLTIPS = {
     "spec_name": "Спек персонажа.",
     "shuffle_rating": "Рейтинг Solo Shuffle (из Blizzard ladder). Пусто = нет данных Blizzard для этого режима/спека.",
     "blitz_rating": "Рейтинг Blitz BG (из Blizzard ladder). Пусто = нет данных Blizzard для этого режима/спека.",
-    "rating_2v2": "Рейтинг 2v2 (из check-pvp). Пусто = нет строки check-pvp для этого персонажа/спека.",
-    "rating_3v3": "Рейтинг 3v3 (из check-pvp). Пусто = нет строки check-pvp для этого персонажа/спека.",
-    "rating_rbg": "Рейтинг RBG (из check-pvp). Пусто = нет строки check-pvp для этого персонажа/спека.",
+    "rating_2v2": "Рейтинг 2v2: Blizzard ladder имеет приоритет, check-pvp заполняет пропуски.",
+    "rating_3v3": "Рейтинг 3v3: Blizzard ladder имеет приоритет, check-pvp заполняет пропуски.",
+    "rating_rbg": "Рейтинг RBG: Blizzard ladder имеет приоритет, check-pvp заполняет пропуски.",
 }
 
 SUMMARY_COLUMN_TOOLTIPS = {
@@ -1457,7 +1457,7 @@ PLAYER_TABLE_GUIDE_RU = dedent(
     """
     ### Таблица персонажей: что она показывает
 
-    Эта таблица отвечает на вопрос: **какие конкретные персонажи есть в датасете и какие рейтинги у них в разных PvP-режимах**. Одна строка - один персонаж, объединенный по региону, реалму и имени. Данные собираются из Blizzard ladder для Solo Shuffle и Blitz BG, а также из check-pvp для 2v2, 3v3 и RBG.
+    Эта таблица отвечает на вопрос: **какие конкретные персонажи есть в датасете и какие рейтинги у них в разных PvP-режимах**. Одна строка - один персонаж, объединенный по региону, реалму и имени. Solo Shuffle, Blitz BG, 2v2, 3v3 и RBG берутся из Blizzard ladder, если Blizzard вернул персонажа; check-pvp заполняет пропуски для 2v2, 3v3 и RBG.
 
     **Как пользоваться таблицей**
 
@@ -1475,9 +1475,9 @@ PLAYER_TABLE_GUIDE_RU = dedent(
     - `Realm` - игровой реалм персонажа.
     - `Class` - класс персонажа, например Druid, Mage, Warrior.
     - `Spec` - активная специализация, например Restoration, Fire, Arms.
-    - `Shuffle` - текущий Solo Shuffle rating из Blizzard PvP leaderboard. Если персонаж не найден в этом режиме, значение `0`.
-    - `Blitz BG` - текущий Battleground Blitz rating из Blizzard PvP leaderboard. Если участия нет, значение `0`.
-    - `2v2`, `3v3`, `RBG` - рейтинги из check-pvp. Если режима нет в данных, значение `0`.
+    - `Shuffle` - текущий Solo Shuffle rating из Blizzard PvP leaderboard. Если персонаж не найден в этом режиме, значение пустое.
+    - `Blitz BG` - текущий Battleground Blitz rating из Blizzard PvP leaderboard. Если участия нет, значение пустое.
+    - `2v2`, `3v3`, `RBG` - сначала рейтинги из Blizzard ladder, затем check-pvp для пропусков. Пусто значит, что рейтинг не найден ни в одном источнике.
 
     **Как читать значения**
 
@@ -1501,7 +1501,7 @@ PLAYER_TABLE_GUIDE_EN = dedent(
     """
     ### Player table: what it shows
 
-    This table answers: **which individual characters are in the dataset and what ratings they have across PvP modes**. One row is one character, merged by region, realm, and character name. Solo Shuffle and Blitz BG come from Blizzard ladders; 2v2, 3v3, and RBG come from check-pvp.
+    This table answers: **which individual characters are in the dataset and what ratings they have across PvP modes**. One row is one character, merged by region, realm, and character name. Solo Shuffle, Blitz BG, 2v2, 3v3, and RBG use Blizzard ladders where available; check-pvp fills missing 2v2, 3v3, and RBG ratings.
 
     **How to use it**
 
@@ -1521,7 +1521,7 @@ PLAYER_TABLE_GUIDE_EN = dedent(
     - `Spec` - active specialization, such as Restoration, Fire, Arms.
     - `Shuffle` - current Solo Shuffle rating from Blizzard PvP leaderboards. Blank means Blizzard did not return a row for this mode/spec.
     - `Blitz BG` - current Battleground Blitz rating from Blizzard PvP leaderboards. Blank means Blizzard did not return a row for this mode/spec.
-    - `2v2`, `3v3`, `RBG` - ratings from check-pvp. Blank means check-pvp did not return a row for this character/spec.
+    - `2v2`, `3v3`, `RBG` - ratings from Blizzard ladders first, then check-pvp for missing values. Blank means neither source returned this rating.
 
     **How to interpret values**
 
