@@ -248,6 +248,7 @@ TABLE_STYLE_CELL = {
     "maxWidth": "220px",
     "overflow": "hidden",
     "textOverflow": "ellipsis",
+    "textAlign": "left",
 }
 TABLE_STYLE_HEADER = {
     "backgroundColor": "#3a2714",
@@ -261,66 +262,46 @@ TABLE_STYLE_DATA_CONDITIONAL = [
     {"if": {"state": "active"}, "backgroundColor": "#493516", "border": "1px solid #ffd75a"},
     {"if": {"filter_query": "{rating_3v3} >= 2400"}, "backgroundColor": "#403019"},
 ]
-MAIN_COLUMN_WIDTHS = {
-    "region": "72px",
-    "character_name": "190px",
-    "realm": "138px",
-    "class_name": "132px",
-    "spec_name": "132px",
-    "shuffle_rating": "88px",
-    "blitz_rating": "88px",
-    "rating_2v2": "78px",
-    "rating_3v3": "78px",
-    "rating_rbg": "78px",
-}
-SUMMARY_COLUMN_WIDTHS = {
-    "spec_name": "165px",
-    "class_name": "136px",
-    "game_mode": "112px",
-    "region_filter": "84px",
-    "total_players": "108px",
-    "n_p20": "92px",
-    "n_p20_p50": "92px",
-    "n_p50_p80": "92px",
-    "n_p80": "92px",
-    "pct_p20": "98px",
-    "pct_p20_p50": "98px",
-    "pct_p50_p80": "98px",
-    "pct_p80": "98px",
-    "mean_rating_all": "104px",
-    "median_rating_all": "104px",
-    "p20_rating_all": "104px",
-    "p80_rating_all": "104px",
-    "mean_rating_1800_plus": "110px",
-    "median_rating_1800_plus": "110px",
-    "p20_rating_1800_plus": "110px",
-    "p80_rating_1800_plus": "110px",
-    "overall_spec_share": "106px",
-    "spec_share_p80_plus": "112px",
-    "lift_p80_plus": "96px",
-}
-MAIN_STYLE_CELL_CONDITIONAL = [
-    {"if": {"column_id": column}, "textAlign": "right"} for column in RATING_COLUMNS
-] + [
-    {
-        "if": {"column_id": column},
-        "minWidth": width,
-        "width": width,
-        "maxWidth": width,
-    }
-    for column, width in MAIN_COLUMN_WIDTHS.items()
-]
-SUMMARY_STYLE_CELL_CONDITIONAL = [
-    {"if": {"column_id": column}, "textAlign": "right"} for column in SUMMARY_NUMERIC_COLUMNS
-] + [
-    {
-        "if": {"column_id": column},
-        "minWidth": width,
-        "width": width,
-        "maxWidth": width,
-    }
-    for column, width in SUMMARY_COLUMN_WIDTHS.items()
-]
+MAIN_COLUMN_HEADERS = {column["id"]: str(column["name"]) for column in MAIN_TABLE_COLUMNS}
+SUMMARY_COLUMN_HEADERS = {column["id"]: str(column["name"]) for column in SUMMARY_COLUMNS}
+MAIN_STYLE_CELL_CONDITIONAL: list[dict[str, Any]] = []
+SUMMARY_STYLE_CELL_CONDITIONAL: list[dict[str, Any]] = []
+
+
+def column_width_rules(
+    df: pd.DataFrame,
+    columns: list[str],
+    headers: dict[str, str],
+    *,
+    min_px: int,
+    max_px: int,
+    char_px: int = 8,
+    padding_px: int = 28,
+) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    for column in columns:
+        header_len = len(headers.get(column, column))
+        if column not in df.columns:
+            max_len = header_len
+        else:
+            series = df[column]
+            if series.empty:
+                max_len = header_len
+            else:
+                text_lengths = series.dropna().astype(str).str.len()
+                value_len = int(text_lengths.max()) if not text_lengths.empty else 0
+                max_len = max(header_len, value_len)
+        width_px = max(min_px, min(max_px, max_len * char_px + padding_px))
+        width = f"{width_px}px"
+        rules.append(
+            {
+                "if": {"column_id": column},
+                "minWidth": width,
+                "width": width,
+                "maxWidth": width,
+            }
+        )
+    return rules
 
 
 def load_data() -> pd.DataFrame:
@@ -1425,12 +1406,28 @@ DATA_LAST_CHECK = 0.0
 
 def reload_application_data() -> None:
     global DATA, MAIN_RANGE_BOUNDS, SUMMARY_RANGE_BOUNDS, DATA_VERSION
+    global MAIN_STYLE_CELL_CONDITIONAL, SUMMARY_STYLE_CELL_CONDITIONAL
 
     DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
     gc.collect()
     DATA = load_data()
     MAIN_RANGE_BOUNDS = make_range_bounds(DATA, RATING_COLUMNS)
     SUMMARY_RANGE_BOUNDS = make_summary_range_bounds(DATA)
+    MAIN_STYLE_CELL_CONDITIONAL = column_width_rules(
+        DATA,
+        MAIN_TABLE_COLUMN_IDS,
+        MAIN_COLUMN_HEADERS,
+        min_px=70,
+        max_px=260,
+    )
+    summary_source = make_summary(list(GAME_MODE_COLUMNS.keys()), ["Both", "US", "EU"])
+    SUMMARY_STYLE_CELL_CONDITIONAL = column_width_rules(
+        summary_source,
+        SUMMARY_COLUMN_IDS,
+        SUMMARY_COLUMN_HEADERS,
+        min_px=82,
+        max_px=240,
+    )
     DATA_VERSION = dataset_version(DATA_PATH)
     SUMMARY_CACHE.clear()
     SUMMARY_COLUMN_TOOLTIPS["lift_p80_plus"] = make_p80_lift_tooltip()
@@ -2056,7 +2053,7 @@ def layout() -> html.Div:
                     "overflowY": "auto",
                     "minWidth": "100%",
                 },
-                style_cell={**TABLE_STYLE_CELL, "minWidth": "76px", "maxWidth": "180px"},
+                style_cell=TABLE_STYLE_CELL,
                 style_cell_conditional=SUMMARY_STYLE_CELL_CONDITIONAL,
                 style_header=TABLE_STYLE_HEADER,
                 style_data_conditional=[
