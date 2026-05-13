@@ -1163,6 +1163,17 @@ def spec_icon_src(class_name: str, spec_name: str) -> str:
     return f"/assets/icons/spec/{icon_slug(class_name)}-{icon_slug(spec_name)}.jpg"
 
 
+def summary_metric_label(column_id: str) -> str:
+    return SUMMARY_RANGE_LABELS.get(
+        column_id,
+        SUMMARY_COLUMN_BY_ID.get(column_id, {}).get("name", column_id),
+    )
+
+
+def is_ratio_summary_column(column_id: str) -> bool:
+    return column_id.startswith("pct_") or column_id.endswith("_share") or "_share_" in column_id
+
+
 def chart_icon_images(labels: list[str], sources: list[str]) -> list[dict[str, Any]]:
     return [
         {
@@ -1297,6 +1308,106 @@ def make_lift_figure(
         ]
     )
     apply_plot_theme(fig, f"{mode} {region_filter} {lift_label}", lift_label)
+    fig.update_layout(images=chart_icon_images(labels, icons))
+    fig.update_xaxes(
+        range=[-0.6, len(df) - 0.4],
+        tickmode="array",
+        tickvals=positions,
+        ticktext=[""] * len(df),
+        title="",
+    )
+    fig.update_yaxes(rangemode="tozero")
+    return fig, icon_strip(labels, icons)
+
+
+def selected_game_modes(modes: list[str] | str | None) -> list[str]:
+    if isinstance(modes, str):
+        requested = {modes}
+    else:
+        requested = set(modes or [])
+    selected = [mode for mode in GAME_MODE_COLUMNS if mode in requested]
+    return selected or list(GAME_MODE_COLUMNS.keys())
+
+
+def prepare_average_chart_data(
+    modes: list[str] | str | None,
+    region_filter: str,
+    summary_column: str,
+) -> pd.DataFrame:
+    summary_column = summary_column if summary_column in SUMMARY_NUMERIC_COLUMNS else "lift_p80_plus"
+    modes = selected_game_modes(modes)
+    df = make_summary_cached(modes, [region_filter]).copy()
+    if df.empty or summary_column not in df:
+        return pd.DataFrame()
+
+    df[summary_column] = pd.to_numeric(df[summary_column], errors="coerce")
+    df = df[df[summary_column].notna()].copy()
+    if df.empty:
+        return df
+
+    averaged = (
+        df.groupby(["class_name", "spec_name"], observed=True)
+        .agg(
+            value=(summary_column, "mean"),
+            mode_count=("game_mode", "nunique"),
+        )
+        .reset_index()
+    )
+    averaged["label"] = [
+        spec_label(class_name, spec_name)
+        for class_name, spec_name in zip(averaged["class_name"], averaged["spec_name"])
+    ]
+    averaged["icon_src"] = [
+        spec_icon_src(class_name, spec_name)
+        for class_name, spec_name in zip(averaged["class_name"], averaged["spec_name"])
+    ]
+    return averaged.sort_values("value", ascending=False, kind="mergesort").reset_index(drop=True)
+
+
+def make_average_figure(
+    modes: list[str] | str | None,
+    region_filter: str,
+    summary_column: str,
+) -> tuple[go.Figure, list[html.Img]]:
+    go = plotly_go()
+    summary_column = summary_column if summary_column in SUMMARY_NUMERIC_COLUMNS else "lift_p80_plus"
+    metric_label = summary_metric_label(summary_column)
+    selected_modes = selected_game_modes(modes)
+    df = prepare_average_chart_data(selected_modes, region_filter, summary_column)
+    if df.empty:
+        return (
+            empty_chart(f"Average {metric_label} by spec", "No summary data for selected filters."),
+            [],
+        )
+
+    positions = list(range(len(df)))
+    labels = df["label"].tolist()
+    icons = df["icon_src"].tolist()
+    colors = [class_color(class_name) for class_name in df["class_name"]]
+    hover_value = "%{y:.2%}" if is_ratio_summary_column(summary_column) else "%{y:.2f}"
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=positions,
+                y=df["value"],
+                marker={"color": colors, "line": {"color": "#f0b400", "width": 0.8}},
+                customdata=list(
+                    zip(
+                        df["class_name"],
+                        df["spec_name"],
+                        df["mode_count"],
+                    )
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                    f"Avg {metric_label}: {hover_value}<br>"
+                    "Modes included: %{customdata[2]}<extra></extra>"
+                ),
+            )
+        ]
+    )
+    mode_text = ", ".join(selected_modes)
+    apply_plot_theme(fig, f"{region_filter} avg {metric_label}: {mode_text}", f"Avg {metric_label}")
     fig.update_layout(images=chart_icon_images(labels, icons))
     fig.update_xaxes(
         range=[-0.6, len(df) - 0.4],
@@ -1757,6 +1868,7 @@ def make_charts_page() -> html.Div:
         {"label": "US", "value": "US"},
     ]
     lift_options = [{"label": "P80+", "value": "lift_p80_plus"}]
+    average_column_options = make_column_options(SUMMARY_NUMERIC_COLUMNS)
     graph_config = {"displaylogo": False, "responsive": True}
 
     return html.Div(
@@ -1830,6 +1942,37 @@ def make_charts_page() -> html.Div:
                     ),
                     dcc.Graph(id="violin-chart", className="chart-graph", config=graph_config),
                     html.Div(id="violin-chart-icons", className="chart-axis-icons"),
+                ],
+            ),
+            html.Div(
+                className="chart-card",
+                children=[
+                    html.Div(
+                        className="filters chart-filters",
+                        children=[
+                            make_multi_filter(
+                                "average-chart-modes",
+                                "Game Modes",
+                                mode_options,
+                                "All modes",
+                                list(GAME_MODE_COLUMNS.keys()),
+                            ),
+                            make_single_filter(
+                                "average-chart-region",
+                                "Region",
+                                region_options,
+                                "Both",
+                            ),
+                            make_single_filter(
+                                "average-chart-column",
+                                "Metric",
+                                average_column_options,
+                                "lift_p80_plus",
+                            ),
+                        ],
+                    ),
+                    dcc.Graph(id="average-chart", className="chart-graph", config=graph_config),
+                    html.Div(id="average-chart-icons", className="chart-axis-icons"),
                 ],
             ),
         ],
@@ -2290,6 +2433,28 @@ def update_violin_chart(
     mode = mode or "Shuffle"
     region_filter = region_filter or "Both"
     return make_violin_figure(mode, region_filter)
+
+
+@app.callback(
+    Output("average-chart", "figure"),
+    Output("average-chart-icons", "children"),
+    Input("site-tabs", "value"),
+    Input("average-chart-modes", "value"),
+    Input("average-chart-region", "value"),
+    Input("average-chart-column", "value"),
+)
+def update_average_chart(
+    active_tab: str | None,
+    modes: list[str] | None,
+    region_filter: str | None,
+    summary_column: str | None,
+) -> tuple[go.Figure | dict, list[html.Img]]:
+    if active_tab != "charts":
+        return {}, []
+    refresh_application_data_if_changed()
+    region_filter = region_filter or "Both"
+    summary_column = summary_column or "lift_p80_plus"
+    return make_average_figure(modes, region_filter, summary_column)
 
 
 @app.callback(
