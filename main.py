@@ -5,10 +5,10 @@ import math
 import os
 from pathlib import Path
 
-from wowpvp.blizzard import BlizzardClient, fetch_blizzard_pvp_data
+from wowpvp.blizzard import BlizzardClient, fetch_blizzard_profile_specs, fetch_blizzard_pvp_data
 from wowpvp.checkpvp import CheckPvpClient, fetch_checkpvp_rankings
 from wowpvp.config import Settings
-from wowpvp.etl import build_final_dataset
+from wowpvp.etl import blizzard_global_profile_candidates, build_final_dataset
 from wowpvp.icons import fetch_blizzard_icons
 from wowpvp.utils import reset_generated_data
 
@@ -46,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         help="Do not refresh local Blizzard class/spec icons.",
     )
     parser.add_argument(
+        "--skip-blizzard-profiles",
+        action="store_true",
+        help="Do not fetch character profiles for Blizzard-only 2v2/3v3/RBG players.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Ignore cached HTTP/page data where supported.",
@@ -68,6 +73,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Maximum parallel HTTP workers. Defaults to floor(cpu_count * cpu_target), "
             "capped by WOWPVP_MAX_WORKERS_CAP."
+        ),
+    )
+    parser.add_argument(
+        "--blizzard-profile-workers",
+        type=int,
+        default=None,
+        help=(
+            "Parallel workers for targeted Blizzard character profile lookups. "
+            "Defaults to --parallel-workers and is capped internally."
         ),
     )
     parser.add_argument(
@@ -138,6 +152,19 @@ def main() -> None:
             force=args.force,
             max_workers=parallel_workers,
         )
+
+    if not args.skip_blizzard and not args.skip_blizzard_profiles:
+        profile_candidates = blizzard_global_profile_candidates(settings.data_dir, regions=regions)
+        if not profile_candidates.empty:
+            fetch_blizzard_profile_specs(
+                client=blizzard,
+                players=profile_candidates,
+                data_dir=settings.data_dir,
+                force=args.force,
+                max_workers=args.blizzard_profile_workers or parallel_workers,
+            )
+        else:
+            print("Blizzard profile specs: no Blizzard-only 2v2/3v3/RBG players")
 
     output_path = build_final_dataset(
         settings.data_dir,

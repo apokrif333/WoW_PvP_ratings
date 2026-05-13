@@ -33,6 +33,15 @@ BLIZZARD_GLOBAL_IDENTITY_COLUMNS = [
     "realm",
     "realm_slug",
 ]
+BLIZZARD_PROFILE_COLUMNS = [
+    *BLIZZARD_GLOBAL_IDENTITY_COLUMNS,
+    "class_name",
+    "spec_name",
+]
+BLIZZARD_GLOBAL_COLUMNS = [
+    *BLIZZARD_PROFILE_COLUMNS,
+    *BLIZZARD_GLOBAL_RATING_COLUMNS.values(),
+]
 BLIZZARD_COLUMNS = [
     *BLIZZARD_IDENTITY_COLUMNS,
     "shuffle_rating",
@@ -59,6 +68,13 @@ def load_raw_blizzard(data_dir: Path) -> pd.DataFrame:
 
 def load_raw_checkpvp(data_dir: Path) -> pd.DataFrame:
     paths = sorted((data_dir / "raw").glob("checkpvp_*.parquet"))
+    if not paths:
+        return pd.DataFrame()
+    return pd.concat([pd.read_parquet(path) for path in paths], ignore_index=True)
+
+
+def load_raw_blizzard_profile_specs(data_dir: Path) -> pd.DataFrame:
+    paths = sorted((data_dir / "raw").glob("blizzard_profile_specs_*.parquet"))
     if not paths:
         return pd.DataFrame()
     return pd.concat([pd.read_parquet(path) for path in paths], ignore_index=True)
@@ -109,8 +125,31 @@ def prepare_blizzard(df: pd.DataFrame) -> pd.DataFrame:
     return result[BLIZZARD_COLUMNS]
 
 
-def prepare_blizzard_global(df: pd.DataFrame) -> pd.DataFrame:
-    columns = [*BLIZZARD_GLOBAL_IDENTITY_COLUMNS, *BLIZZARD_GLOBAL_RATING_COLUMNS.values()]
+def prepare_blizzard_profile_specs(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=BLIZZARD_PROFILE_COLUMNS)
+
+    result = df.copy()
+    for column in BLIZZARD_PROFILE_COLUMNS:
+        if column not in result:
+            result[column] = ""
+        result[column] = result[column].fillna("").astype(str)
+    result = result[BLIZZARD_PROFILE_COLUMNS]
+    result["_has_spec"] = result["class_name"].ne("") & result["spec_name"].ne("")
+    result = (
+        result.sort_values(["player_key", "_has_spec"], ascending=[True, False], kind="mergesort")
+        .drop_duplicates("player_key", keep="first")
+        .drop(columns="_has_spec")
+        .reset_index(drop=True)
+    )
+    return result
+
+
+def prepare_blizzard_global(
+    df: pd.DataFrame,
+    profile_specs: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    columns = BLIZZARD_GLOBAL_COLUMNS
     if df.empty:
         return pd.DataFrame(columns=columns)
 
@@ -139,6 +178,21 @@ def prepare_blizzard_global(df: pd.DataFrame) -> pd.DataFrame:
         .rename(columns=BLIZZARD_GLOBAL_RATING_COLUMNS)
         .reset_index()
     )
+    profiles = prepare_blizzard_profile_specs(
+        profile_specs if profile_specs is not None else pd.DataFrame()
+    )
+    if profiles.empty:
+        ratings["class_name"] = ""
+        ratings["spec_name"] = ""
+    else:
+        ratings = ratings.merge(
+            profiles[["player_key", "class_name", "spec_name"]],
+            on="player_key",
+            how="left",
+        )
+        ratings["class_name"] = ratings["class_name"].fillna("")
+        ratings["spec_name"] = ratings["spec_name"].fillna("")
+
     for column in BLIZZARD_GLOBAL_RATING_COLUMNS.values():
         if column not in ratings:
             ratings[column] = pd.NA
@@ -226,8 +280,18 @@ def normalize_final_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
-def choose_global_rating_target(final: pd.DataFrame, indices: list[int]) -> int:
+def choose_global_rating_target(
+    final: pd.DataFrame,
+    indices: list[int],
+    class_name: str = "",
+    spec_name: str = "",
+) -> int:
     group = final.loc[indices]
+    if class_name and spec_name:
+        matches_profile_spec = group["class_name"].eq(class_name) & group["spec_name"].eq(spec_name)
+        if matches_profile_spec.any():
+            return int(matches_profile_spec[matches_profile_spec].index[0])
+
     checkpvp_columns = list(BLIZZARD_GLOBAL_RATING_COLUMNS.values())
     has_checkpvp_rating = group[checkpvp_columns].notna().any(axis=1)
     if has_checkpvp_rating.any():
@@ -276,7 +340,12 @@ def apply_blizzard_global_ratings(final: pd.DataFrame, blizzard_global: pd.DataF
         key = str(row_data["player_key"])
         indices = indices_by_player.get(key)
         if indices:
-            target_index = choose_global_rating_target(final, indices)
+            target_index = choose_global_rating_target(
+                final,
+                indices,
+                str(row_data.get("class_name") or ""),
+                str(row_data.get("spec_name") or ""),
+            )
             for column in BLIZZARD_GLOBAL_RATING_COLUMNS.values():
                 value = row_data.get(column)
                 if pd.notna(value):
@@ -286,8 +355,8 @@ def apply_blizzard_global_ratings(final: pd.DataFrame, blizzard_global: pd.DataF
         new_row: dict[str, object] = {column: pd.NA for column in FINAL_COLUMNS}
         for column in BLIZZARD_GLOBAL_IDENTITY_COLUMNS:
             new_row[column] = row_data.get(column, "")
-        new_row["class_name"] = ""
-        new_row["spec_name"] = ""
+        new_row["class_name"] = row_data.get("class_name", "") or ""
+        new_row["spec_name"] = row_data.get("spec_name", "") or ""
         new_row["shuffle_class_name"] = ""
         new_row["shuffle_spec_name"] = ""
         new_row["blitz_class_name"] = ""
@@ -303,6 +372,42 @@ def apply_blizzard_global_ratings(final: pd.DataFrame, blizzard_global: pd.DataF
     return final
 
 
+def blizzard_global_profile_candidates(
+    data_dir: Path,
+    regions: list[str] | None = None,
+) -> pd.DataFrame:
+    raw_blizzard = load_raw_blizzard(data_dir)
+    if raw_blizzard.empty or "mode" not in raw_blizzard:
+        return pd.DataFrame(columns=BLIZZARD_GLOBAL_IDENTITY_COLUMNS)
+
+    raw_blizzard = raw_blizzard.copy()
+    raw_blizzard["mode"] = raw_blizzard["mode"].astype(str)
+    global_players = raw_blizzard[raw_blizzard["mode"].isin(BLIZZARD_GLOBAL_RATING_COLUMNS)].copy()
+    if regions:
+        allowed_regions = {region.lower() for region in regions}
+        global_players = global_players[global_players["region"].astype(str).str.lower().isin(allowed_regions)]
+    if global_players.empty:
+        return pd.DataFrame(columns=BLIZZARD_GLOBAL_IDENTITY_COLUMNS)
+
+    known_keys: set[str] = set()
+    spec_rows = raw_blizzard[raw_blizzard["mode"].isin(BLIZZARD_MODE_PREFIXES)]
+    if {"class_name", "spec_name"}.issubset(spec_rows.columns):
+        has_spec = spec_rows["class_name"].fillna("").ne("") & spec_rows["spec_name"].fillna("").ne("")
+        known_keys.update(spec_rows.loc[has_spec, "player_key"].astype(str))
+
+    checkpvp = prepare_checkpvp(load_raw_checkpvp(data_dir))
+    if not checkpvp.empty:
+        has_spec = checkpvp["class_name"].fillna("").ne("") & checkpvp["spec_name"].fillna("").ne("")
+        known_keys.update(checkpvp.loc[has_spec, "player_key"].astype(str))
+
+    result = (
+        global_players[~global_players["player_key"].astype(str).isin(known_keys)]
+        .sort_values(["region", "player_key"], kind="mergesort")
+        .drop_duplicates("player_key", keep="first")
+    )
+    return result[BLIZZARD_GLOBAL_IDENTITY_COLUMNS].reset_index(drop=True)
+
+
 def build_final_dataset(
     data_dir: Path,
     write_csv: bool = True,
@@ -311,7 +416,8 @@ def build_final_dataset(
     ensure_dirs(data_dir)
     raw_blizzard = load_raw_blizzard(data_dir)
     blizzard = prepare_blizzard(raw_blizzard)
-    blizzard_global = prepare_blizzard_global(raw_blizzard)
+    profile_specs = prepare_blizzard_profile_specs(load_raw_blizzard_profile_specs(data_dir))
+    blizzard_global = prepare_blizzard_global(raw_blizzard, profile_specs)
     checkpvp = prepare_checkpvp(load_raw_checkpvp(data_dir))
 
     merge_keys = ["player_key", "class_name", "spec_name"]
