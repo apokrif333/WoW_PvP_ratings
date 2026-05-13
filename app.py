@@ -1350,6 +1350,7 @@ def prepare_average_chart_data(
         .agg(
             value=(summary_column, "mean"),
             mode_count=("game_mode", "nunique"),
+            observation_count=("total_players", "sum"),
         )
         .reset_index()
     )
@@ -1396,12 +1397,14 @@ def make_average_figure(
                         df["class_name"],
                         df["spec_name"],
                         df["mode_count"],
+                        df["observation_count"],
                     )
                 ),
                 hovertemplate=(
                     "<b>%{customdata[0]} %{customdata[1]}</b><br>"
                     f"Avg {metric_label}: {hover_value}<br>"
-                    "Modes included: %{customdata[2]}<extra></extra>"
+                    "Modes included: %{customdata[2]}<br>"
+                    "Observations: %{customdata[3]:,}<extra></extra>"
                 ),
             )
         ]
