@@ -3,7 +3,7 @@ name: Refresh WoW PvP data
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "48 15 * * *"
 
 jobs:
   refresh:
