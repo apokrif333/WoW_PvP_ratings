@@ -82,6 +82,32 @@ def _prepare_players(df: pd.DataFrame) -> pd.DataFrame:
     return clean
 
 
+def _ensure_public_read_policy(cur: Any, table_name: str, policy_name: str) -> None:
+    cur.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
+    cur.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_policies
+                WHERE schemaname = 'public'
+                  AND tablename = %s
+                  AND policyname = %s
+            ) THEN
+                EXECUTE format(
+                    'CREATE POLICY %I ON %I FOR SELECT USING (true)',
+                    %s,
+                    %s
+                );
+            END IF;
+        END
+        $$;
+        """,
+        (table_name, policy_name, policy_name, table_name),
+    )
+
+
 def write_players_to_database(df: pd.DataFrame) -> None:
     if not has_database_store():
         return
@@ -110,6 +136,11 @@ def write_players_to_database(df: pd.DataFrame) -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_pvp_players_region ON pvp_players(region)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_pvp_players_class ON pvp_players(class_name)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_pvp_players_spec ON pvp_players(spec_name)")
+            _ensure_public_read_policy(
+                cur,
+                table_name="pvp_players",
+                policy_name="pvp_players_public_read",
+            )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS pvp_dataset_metadata (
@@ -118,6 +149,11 @@ def write_players_to_database(df: pd.DataFrame) -> None:
                     row_count integer NOT NULL
                 )
                 """
+            )
+            _ensure_public_read_policy(
+                cur,
+                table_name="pvp_dataset_metadata",
+                policy_name="pvp_dataset_metadata_public_read",
             )
             cur.execute(
                 """

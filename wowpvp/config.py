@@ -21,7 +21,7 @@ class Settings:
         if not client_id or not client_secret:
             raise RuntimeError(
                 "Missing BLIZZARD_CLIENT_ID or BLIZZARD_CLIENT_SECRET. "
-                "Create a .env file from .env.example."
+                "Create a ..env file from ..env.example."
             )
         return cls(
             blizzard_client_id=client_id,
