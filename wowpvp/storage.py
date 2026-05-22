@@ -83,28 +83,33 @@ def _prepare_players(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _ensure_public_read_policy(cur: Any, table_name: str, policy_name: str) -> None:
-    cur.execute(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY")
+    from psycopg import sql
+
+    cur.execute(
+        sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(
+            sql.Identifier(table_name)
+        )
+    )
     cur.execute(
         """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_policies
-                WHERE schemaname = 'public'
-                  AND tablename = %s
-                  AND policyname = %s
-            ) THEN
-                EXECUTE format(
-                    'CREATE POLICY %I ON %I FOR SELECT USING (true)',
-                    %s,
-                    %s
-                );
-            END IF;
-        END
-        $$;
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_policies
+            WHERE schemaname = 'public'
+              AND tablename = %s
+              AND policyname = %s
+        )
         """,
-        (table_name, policy_name, policy_name, table_name),
+        (table_name, policy_name),
+    )
+    if cur.fetchone()[0]:
+        return
+
+    cur.execute(
+        sql.SQL("CREATE POLICY {} ON {} FOR SELECT USING (true)").format(
+            sql.Identifier(policy_name),
+            sql.Identifier(table_name),
+        )
     )
 
 
