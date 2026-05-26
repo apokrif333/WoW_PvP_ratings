@@ -179,7 +179,9 @@ def _select_player_columns(columns: list[str] | tuple[str, ...] | None = None) -
 
 
 def _csv_read_dtypes(columns: list[str]) -> dict[str, str]:
-    return {column: "category" for column in columns if column in TEXT_COLUMNS}
+    dtypes = {column: "category" for column in columns if column in TEXT_COLUMNS}
+    dtypes.update({column: "Int64" for column in columns if column in INTEGER_COLUMNS})
+    return dtypes
 
 
 def _write_copy_chunks_to_buffer(copy: Any, buffer: io.BytesIO) -> None:

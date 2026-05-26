@@ -9,6 +9,7 @@ from time import monotonic
 from typing import Any
 from urllib.parse import quote
 
+import numpy as np
 import pandas as pd
 from dash import ALL, Dash, Input, Output, State, dash_table, dcc, html
 from dash.dash_table import FormatTemplate
@@ -21,7 +22,7 @@ from wowpvp.utils import slugify_realm
 
 DATA_PATH = Path("data/processed/pvp_players.parquet")
 DATA_REFRESH_CHECK_SECONDS = 60
-SUMMARY_CACHE_MAX_ITEMS = 24
+SUMMARY_CACHE_MAX_ITEMS = 8
 RATING_COLUMNS = ["shuffle_rating", "blitz_rating", "rating_2v2", "rating_3v3", "rating_rbg"]
 GAME_MODE_COLUMNS = {
     "Shuffle": "shuffle_rating",
@@ -898,16 +899,27 @@ def main_table_records(df: pd.DataFrame) -> list[dict]:
     return display.to_dict("records")
 
 
-def make_quantile(series: pd.Series, q: float) -> float | None:
+def numeric_values(series: pd.Series) -> np.ndarray:
     if series.empty:
+        return np.array([], dtype="float64")
+    values = series.to_numpy(dtype="float64", na_value=np.nan, copy=False)
+    if np.isnan(values).any():
+        values = values[~np.isnan(values)]
+    return values
+
+
+def make_quantile(series: pd.Series, q: float) -> float | None:
+    values = numeric_values(series)
+    if not values.size:
         return None
-    return round(float(series.quantile(q)), 2)
+    return round(float(np.quantile(values, q)), 2)
 
 
 def make_mean(series: pd.Series) -> float | None:
-    if series.empty:
+    values = numeric_values(series)
+    if not values.size:
         return None
-    return round(float(series.mean()), 2)
+    return round(float(np.mean(values)), 2)
 
 
 def make_ratio(numerator: int | float, denominator: int | float, digits: int = 4) -> float | None:
@@ -923,7 +935,9 @@ def make_ratio(numerator: int | float, denominator: int | float, digits: int = 4
 
 
 def active_mode_ratings(df: pd.DataFrame, rating_column: str) -> pd.Series:
-    ratings = pd.to_numeric(df[rating_column], errors="coerce")
+    ratings = df[rating_column]
+    if not pd.api.types.is_numeric_dtype(ratings):
+        ratings = pd.to_numeric(ratings, errors="coerce")
     return ratings[ratings > 0]
 
 
@@ -1011,8 +1025,8 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
         mode_specs = df["spec_name"].astype(str)
         base_specs = DATA.loc[df.index, "spec_name"].astype(str)
         df["spec_name"] = mode_specs.where(mode_specs.ne(""), base_specs).astype("category")
-    df["class_name"] = df["class_name"].fillna("").astype(str)
-    df["spec_name"] = df["spec_name"].fillna("").astype(str)
+    df["class_name"] = make_category_column(df["class_name"])
+    df["spec_name"] = make_category_column(df["spec_name"])
     df = df[df["class_name"].ne("") & df["spec_name"].ne("")].copy()
     if mode in BLIZZARD_GAME_MODES:
         rating_floor = blizzard_mode_rating_floor(df, rating_column)
@@ -1044,7 +1058,11 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     total_p80_plus = int(df[PERCENTILE_BAND_COLUMN].eq("p80").sum()) if p80_cutoff is not None else 0
     rows: list[dict[str, Any]] = []
 
-    for (class_name, spec_name), group in df.groupby(["class_name", "spec_name"], dropna=False):
+    for (class_name, spec_name), group in df.groupby(
+        ["class_name", "spec_name"],
+        observed=True,
+        dropna=False,
+    ):
         ratings = group[rating_column]
         percentile_bands = group[PERCENTILE_BAND_COLUMN]
         total = int(len(group))
@@ -1492,9 +1510,8 @@ def reload_application_data() -> None:
         min_px=70,
         max_px=260,
     )
-    summary_source = make_summary(list(GAME_MODE_COLUMNS.keys()), ["Both", "US", "EU"])
     SUMMARY_STYLE_CELL_CONDITIONAL = column_width_rules(
-        summary_source,
+        pd.DataFrame(columns=SUMMARY_COLUMN_IDS),
         SUMMARY_COLUMN_IDS,
         SUMMARY_COLUMN_HEADERS,
         min_px=82,
