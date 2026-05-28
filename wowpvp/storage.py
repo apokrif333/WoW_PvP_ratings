@@ -43,6 +43,7 @@ TEXT_COLUMNS = {
 }
 INTEGER_COLUMNS = set(PLAYER_COLUMNS) - TEXT_COLUMNS
 TEXT_PLAYER_COLUMNS = [column for column in PLAYER_COLUMNS if column in TEXT_COLUMNS]
+DATA_API_READ_ROLES = ("anon", "authenticated", "service_role")
 
 
 def database_url() -> str:
@@ -82,12 +83,32 @@ def _prepare_players(df: pd.DataFrame) -> pd.DataFrame:
     return clean
 
 
-def _ensure_public_read_policy(cur: Any, table_name: str, policy_name: str) -> None:
+def _grant_public_read(cur: Any, table_name: str) -> None:
     from psycopg import sql
 
     cur.execute(
+        "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+        (list(DATA_API_READ_ROLES),),
+    )
+    roles = [row[0] for row in cur.fetchall()]
+    if not roles:
+        return
+
+    cur.execute(
+        sql.SQL("GRANT SELECT ON TABLE {} TO {}").format(
+            sql.Identifier("public", table_name),
+            sql.SQL(", ").join(sql.Identifier(role) for role in roles),
+        )
+    )
+
+
+def _ensure_public_read_policy(cur: Any, table_name: str, policy_name: str) -> None:
+    from psycopg import sql
+
+    _grant_public_read(cur, table_name)
+    cur.execute(
         sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(
-            sql.Identifier(table_name)
+            sql.Identifier("public", table_name)
         )
     )
     cur.execute(
@@ -108,7 +129,7 @@ def _ensure_public_read_policy(cur: Any, table_name: str, policy_name: str) -> N
     cur.execute(
         sql.SQL("CREATE POLICY {} ON {} FOR SELECT USING (true)").format(
             sql.Identifier(policy_name),
-            sql.Identifier(table_name),
+            sql.Identifier("public", table_name),
         )
     )
 
