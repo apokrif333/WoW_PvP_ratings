@@ -39,6 +39,12 @@ ROLE_FILTER_VALUES = [ROLE_ALL, ROLE_HEALERS, ROLE_TANKS, ROLE_DDS]
 ROLE_FILTER_OPTIONS = [{"label": value, "value": value} for value in ROLE_FILTER_VALUES]
 REGION_FILTER_VALUES = ["Both", "US", "EU"]
 REGION_FILTER_OPTIONS = [{"label": value, "value": value} for value in REGION_FILTER_VALUES]
+AVERAGE_CHART_VALUE_MODE = "Average values"
+AVERAGE_CHART_RANK_MODE = "Average ranks"
+AVERAGE_CHART_AGGREGATION_OPTIONS = [
+    {"label": AVERAGE_CHART_VALUE_MODE, "value": AVERAGE_CHART_VALUE_MODE},
+    {"label": AVERAGE_CHART_RANK_MODE, "value": AVERAGE_CHART_RANK_MODE},
+]
 HEALER_SPECS = {
     ("Druid", "Restoration"),
     ("Evoker", "Preservation"),
@@ -1417,32 +1423,96 @@ def selected_game_modes(modes: list[str] | str | None) -> list[str]:
     return selected_summary_modes(modes)
 
 
+def selected_summary_metrics(metrics: list[str] | str | None) -> list[str]:
+    if isinstance(metrics, str):
+        requested = {metrics}
+    else:
+        requested = set(metrics or [])
+    selected = [column for column in SUMMARY_NUMERIC_COLUMNS if column in requested]
+    return selected or ["lift_p80_plus"]
+
+
+def normalize_average_chart_aggregation(aggregation: str | None) -> str:
+    return aggregation if aggregation == AVERAGE_CHART_RANK_MODE else AVERAGE_CHART_VALUE_MODE
+
+
+def average_chart_metric_text(metrics: list[str]) -> str:
+    labels = [summary_metric_label(metric) for metric in metrics]
+    if len(labels) <= 3:
+        return ", ".join(labels)
+    return ", ".join(labels[:3]) + f", +{len(labels) - 3}"
+
+
 def prepare_average_chart_data(
     modes: list[str] | str | None,
     region_filter: str,
-    summary_column: str,
+    summary_columns: list[str] | str | None,
     role_filter: str | None = ROLE_ALL,
+    aggregation: str | None = AVERAGE_CHART_VALUE_MODE,
 ) -> pd.DataFrame:
-    summary_column = summary_column if summary_column in SUMMARY_NUMERIC_COLUMNS else "lift_p80_plus"
     modes = selected_game_modes(modes)
+    summary_columns = selected_summary_metrics(summary_columns)
+    aggregation = normalize_average_chart_aggregation(aggregation)
     df = make_summary_cached(modes, [region_filter], role_filter).copy()
-    if df.empty or summary_column not in df:
+    if df.empty:
         return pd.DataFrame()
 
-    df[summary_column] = pd.to_numeric(df[summary_column], errors="coerce")
-    df = df[df[summary_column].notna()].copy()
+    available_columns = [column for column in summary_columns if column in df.columns]
+    if not available_columns:
+        return pd.DataFrame()
+
+    for column in available_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df[df[available_columns].notna().any(axis=1)].copy()
     if df.empty:
         return df
 
+    observation_counts = (
+        df.groupby(["class_name", "spec_name"], observed=True)["total_players"]
+        .sum()
+        .rename("observation_count")
+    )
+    if aggregation == AVERAGE_CHART_RANK_MODE:
+        value_frames = []
+        for game_mode, mode_df in df.groupby("game_mode", observed=True):
+            for column in available_columns:
+                metric_df = mode_df[
+                    ["class_name", "spec_name", "game_mode", column]
+                ].dropna(subset=[column]).copy()
+                if metric_df.empty:
+                    continue
+                metric_df["metric"] = column
+                metric_df["value"] = metric_df[column].rank(
+                    ascending=False,
+                    method="min",
+                )
+                value_frames.append(
+                    metric_df[["class_name", "spec_name", "game_mode", "metric", "value"]]
+                )
+        if not value_frames:
+            return pd.DataFrame()
+        values = pd.concat(value_frames, ignore_index=True)
+    else:
+        values = df.melt(
+            id_vars=["class_name", "spec_name", "game_mode"],
+            value_vars=available_columns,
+            var_name="metric",
+            value_name="value",
+        ).dropna(subset=["value"])
+
     averaged = (
-        df.groupby(["class_name", "spec_name"], observed=True)
+        values.groupby(["class_name", "spec_name"], observed=True)
         .agg(
-            value=(summary_column, "mean"),
+            value=("value", "mean"),
             mode_count=("game_mode", "nunique"),
-            observation_count=("total_players", "sum"),
+            metric_count=("metric", "nunique"),
         )
+        .join(observation_counts)
         .reset_index()
     )
+    averaged["mode_count"] = averaged["mode_count"].astype(int)
+    averaged["observation_count"] = averaged["observation_count"].fillna(0).astype(int)
+    averaged["metric_count"] = averaged["metric_count"].astype(int)
     averaged["label"] = [
         spec_label(class_name, spec_name)
         for class_name, spec_name in zip(averaged["class_name"], averaged["spec_name"])
@@ -1451,24 +1521,39 @@ def prepare_average_chart_data(
         spec_icon_src(class_name, spec_name)
         for class_name, spec_name in zip(averaged["class_name"], averaged["spec_name"])
     ]
-    return averaged.sort_values("value", ascending=False, kind="mergesort").reset_index(drop=True)
+    sort_ascending = aggregation == AVERAGE_CHART_RANK_MODE
+    return averaged.sort_values(
+        "value",
+        ascending=sort_ascending,
+        kind="mergesort",
+    ).reset_index(drop=True)
 
 
 def make_average_figure(
     modes: list[str] | str | None,
     region_filter: str,
-    summary_column: str,
+    summary_columns: list[str] | str | None,
     role_filter: str | None = ROLE_ALL,
+    aggregation: str | None = AVERAGE_CHART_VALUE_MODE,
 ) -> tuple[go.Figure, list[html.Img]]:
     go = plotly_go()
-    summary_column = summary_column if summary_column in SUMMARY_NUMERIC_COLUMNS else "lift_p80_plus"
-    metric_label = summary_metric_label(summary_column)
+    summary_columns = selected_summary_metrics(summary_columns)
+    aggregation = normalize_average_chart_aggregation(aggregation)
+    metric_text = average_chart_metric_text(summary_columns)
     selected_modes = selected_game_modes(modes)
     role_filter = normalize_role_filter(role_filter)
-    df = prepare_average_chart_data(selected_modes, region_filter, summary_column, role_filter)
+    df = prepare_average_chart_data(
+        selected_modes,
+        region_filter,
+        summary_columns,
+        role_filter,
+        aggregation,
+    )
+    value_label = "Avg rank" if aggregation == AVERAGE_CHART_RANK_MODE else "Avg value"
+    title_metric = f"{value_label} of {metric_text}"
     if df.empty:
         return (
-            empty_chart(f"Average {metric_label} by spec", "No summary data for selected filters."),
+            empty_chart(f"{title_metric} by spec", "No summary data for selected filters."),
             [],
         )
 
@@ -1476,7 +1561,13 @@ def make_average_figure(
     labels = df["label"].tolist()
     icons = df["icon_src"].tolist()
     colors = [class_color(class_name) for class_name in df["class_name"]]
-    hover_value = "%{y:.2%}" if is_ratio_summary_column(summary_column) else "%{y:.2f}"
+    hover_value = (
+        "%{y:.2%}"
+        if aggregation == AVERAGE_CHART_VALUE_MODE
+        and len(summary_columns) == 1
+        and is_ratio_summary_column(summary_columns[0])
+        else "%{y:.2f}"
+    )
     fig = go.Figure(
         data=[
             go.Bar(
@@ -1488,14 +1579,16 @@ def make_average_figure(
                         df["class_name"],
                         df["spec_name"],
                         df["mode_count"],
+                        df["metric_count"],
                         df["observation_count"],
                     )
                 ),
                 hovertemplate=(
                     "<b>%{customdata[0]} %{customdata[1]}</b><br>"
-                    f"Avg {metric_label}: {hover_value}<br>"
+                    f"{value_label}: {hover_value}<br>"
                     "Modes included: %{customdata[2]}<br>"
-                    "Observations: %{customdata[3]:,}<extra></extra>"
+                    "Metrics included: %{customdata[3]}<br>"
+                    "Observations: %{customdata[4]:,}<extra></extra>"
                 ),
             )
         ]
@@ -1503,8 +1596,8 @@ def make_average_figure(
     mode_text = ", ".join(selected_modes)
     apply_plot_theme(
         fig,
-        f"{region_filter} {role_filter} avg {metric_label}: {mode_text}",
-        f"Avg {metric_label}",
+        f"{region_filter} {role_filter} {title_metric}: {mode_text}",
+        title_metric,
     )
     fig.update_layout(images=chart_icon_images(labels, icons))
     fig.update_xaxes(
@@ -1917,9 +2010,9 @@ CHARTS_GUIDE_EN = dedent(
     """
     ### Charts: how to read them
 
-    The first chart ranks specs by any numeric metric from the Spec Summary table. You can select a role scope, one game mode, several modes, or all modes; the chart then averages the selected metric across those modes for each spec in one selected region and role scope. For example, choosing only Shuffle and `Lift P80+` reproduces the old lift chart. Choosing DDs in 2v2 recalculates cutoffs, shares, and lift only among damage specs.
+    The first chart ranks specs by one or more numeric metrics from the Spec Summary table. `Average values` keeps the existing behavior: it averages the selected metric values across selected modes and metrics. `Average ranks` first ranks specs inside each selected mode/metric, where rank 1 is the best value, then averages those ranks. For example, ranks 1 and 3 across two metrics become an average rank of 2.
 
-    The hover shows the averaged metric, how many modes were included, and `Observations`: the summed `Total Players` used for that spec across the selected modes. This helps separate stable signals from tiny samples.
+    The hover shows the averaged value or rank, how many modes and metrics were included, and `Observations`: the summed `Total Players` used for that spec across the selected modes. This helps separate stable signals from tiny samples.
 
     The second chart is a violin plot. Each violin shows the rating distribution for one spec. Wider parts mean many characters are concentrated around that rating; narrow parts mean fewer characters are there. The box inside the violin shows the middle half of the players: `Q1` is the rating where 25% of players are below it, `Q3` is where 75% are below it, and the line inside the box is the median. To keep the free deployment responsive, very large specs are drawn from a stable stratified sample across the rating distribution, while the table metrics use the full dataset.
     """
@@ -1930,9 +2023,9 @@ CHARTS_GUIDE_RU = dedent(
     """
     ### Графики: как их читать
 
-    Первый график ранжирует спеки по любой числовой метрике из таблицы Spec Summary. Можно выбрать `Role Scope`, один режим, несколько режимов или все режимы; график усреднит выбранную метрику по этим режимам для каждого спека в одном выбранном регионе и role scope. Например, если выбрать только Shuffle и `Lift P80+`, получится старый lift-график. Если выбрать `DDs` в 2v2, пороги, доли и lift будут пересчитаны только среди damage-спеков.
+    Первый график ранжирует спеки по одной или нескольким числовым метрикам из таблицы Spec Summary. `Average values` оставляет текущую логику: график усредняет значения выбранных метрик по выбранным режимам. `Average ranks` сначала присваивает спекам места внутри каждой выбранной пары режим/метрика, где 1 - лучший результат, а потом усредняет эти места. Например, места 1 и 3 по двум метрикам дадут средний ранг 2.
 
-    При наведении показывается среднее значение метрики, сколько режимов вошло в расчёт, и `Observations`: сумма `Total Players` по выбранным режимам для этого спека. Так видно, где сигнал построен на большой выборке, а где на малом числе наблюдений.
+    При наведении показывается среднее значение или среднее место, сколько режимов и метрик вошло в расчет, и `Observations`: сумма `Total Players` по выбранным режимам для этого спека. Так видно, где сигнал построен на большой выборке, а где на малом числе наблюдений.
 
     Второй график - violin plot. Каждая violin показывает распределение рейтинга одного спека. Чем шире violin на каком-то уровне рейтинга, тем больше персонажей находится около этого рейтинга; чем уже, тем меньше. Коробка внутри показывает средние 50% игроков: `Q1` - уровень, ниже которого находится 25% игроков, `Q3` - уровень, ниже которого находится 75%, а линия внутри коробки - медиана. Чтобы бесплатный деплой не падал по памяти, очень крупные спеки рисуются по стабильной стратифицированной выборке по всему распределению рейтинга, а метрики в таблице считаются по полному датасету.
     """
@@ -2027,11 +2120,18 @@ def make_charts_page() -> html.Div:
                                 region_options,
                                 "Both",
                             ),
-                            make_single_filter(
+                            make_multi_filter(
                                 "average-chart-column",
-                                "Metric",
+                                "Metrics",
                                 average_column_options,
-                                "lift_p80_plus",
+                                "Select metrics",
+                                ["lift_p80_plus"],
+                            ),
+                            make_single_filter(
+                                "average-chart-aggregation",
+                                "Aggregation",
+                                AVERAGE_CHART_AGGREGATION_OPTIONS,
+                                AVERAGE_CHART_VALUE_MODE,
                             ),
                         ],
                     ),
@@ -2517,20 +2617,22 @@ def update_violin_chart(
     Input("average-chart-modes", "value"),
     Input("average-chart-region", "value"),
     Input("average-chart-column", "value"),
+    Input("average-chart-aggregation", "value"),
 )
 def update_average_chart(
     active_tab: str | None,
     role_filter: str | None,
     modes: list[str] | None,
     region_filter: str | None,
-    summary_column: str | None,
+    summary_columns: list[str] | str | None,
+    aggregation: str | None,
 ) -> tuple[go.Figure | dict, list[html.Img]]:
     if active_tab != "charts":
         return {}, []
     refresh_application_data_if_changed()
     region_filter = region_filter or "Both"
-    summary_column = summary_column or "lift_p80_plus"
-    return make_average_figure(modes, region_filter, summary_column, role_filter)
+    summary_columns = summary_columns or ["lift_p80_plus"]
+    return make_average_figure(modes, region_filter, summary_columns, role_filter, aggregation)
 
 
 @app.callback(
