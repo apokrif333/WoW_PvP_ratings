@@ -31,6 +31,29 @@ GAME_MODE_COLUMNS = {
     "3v3": "rating_3v3",
     "RBG": "rating_rbg",
 }
+ROLE_ALL = "All"
+ROLE_HEALERS = "Healers"
+ROLE_TANKS = "Tanks"
+ROLE_DDS = "DDs"
+ROLE_FILTER_VALUES = [ROLE_ALL, ROLE_HEALERS, ROLE_TANKS, ROLE_DDS]
+ROLE_FILTER_OPTIONS = [{"label": value, "value": value} for value in ROLE_FILTER_VALUES]
+HEALER_SPECS = {
+    ("Druid", "Restoration"),
+    ("Evoker", "Preservation"),
+    ("Monk", "Mistweaver"),
+    ("Paladin", "Holy"),
+    ("Priest", "Discipline"),
+    ("Priest", "Holy"),
+    ("Shaman", "Restoration"),
+}
+TANK_SPECS = {
+    ("Death Knight", "Blood"),
+    ("Demon Hunter", "Vengeance"),
+    ("Druid", "Guardian"),
+    ("Monk", "Brewmaster"),
+    ("Paladin", "Protection"),
+    ("Warrior", "Protection"),
+}
 BLIZZARD_GAME_MODES = {"Shuffle", "Blitz BG"}
 PAGE_SIZE_OPTIONS = [{"label": str(value), "value": value} for value in (10, 20, 50, 100)]
 MAX_DYNAMIC_OPTIONS = 500
@@ -339,6 +362,39 @@ def make_category_column(series: pd.Series) -> pd.Series:
             series = series.fillna("")
         return series
     return series.fillna("").astype(str).astype("category")
+
+
+def normalize_role_filter(role_filter: str | None) -> str:
+    return role_filter if role_filter in ROLE_FILTER_VALUES else ROLE_ALL
+
+
+def spec_role(class_name: str, spec_name: str) -> str:
+    spec_key = (str(class_name or ""), str(spec_name or ""))
+    if spec_key in HEALER_SPECS:
+        return ROLE_HEALERS
+    if spec_key in TANK_SPECS:
+        return ROLE_TANKS
+    return ROLE_DDS
+
+
+def add_role_column(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        df["role_filter"] = pd.Series(dtype="category", index=df.index)
+        return df
+
+    df["role_filter"] = [
+        spec_role(class_name, spec_name)
+        for class_name, spec_name in zip(df["class_name"], df["spec_name"])
+    ]
+    df["role_filter"] = pd.Categorical(df["role_filter"], categories=ROLE_FILTER_VALUES)
+    return df
+
+
+def apply_role_scope(df: pd.DataFrame, role_filter: str | None) -> pd.DataFrame:
+    role_filter = normalize_role_filter(role_filter)
+    if role_filter == ROLE_ALL or "role_filter" not in df.columns:
+        return df
+    return df[df["role_filter"] == role_filter]
 
 
 def make_options(values: pd.Series) -> list[dict[str, str]]:
@@ -983,7 +1039,7 @@ def make_p80_lift_tooltip() -> str:
     if DATA.empty:
         return (
             "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
-            "P80 cutoff is calculated per game mode from active characters with rating > 0."
+            "P80 cutoff is calculated per game mode, region, and role scope from active characters with rating > 0."
         )
 
     cutoffs = []
@@ -996,7 +1052,7 @@ def make_p80_lift_tooltip() -> str:
     return (
         "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
         "The P80+ band is the rank-based top 20% of active characters "
-        f"(rating > 0) in the same game mode and region. Current Both boundary ratings: {cutoff_text}."
+        f"(rating > 0) in the same game mode, region, and role scope. Current Both/All boundary ratings: {cutoff_text}."
     )
 
 
@@ -1028,6 +1084,7 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
     df["class_name"] = make_category_column(df["class_name"])
     df["spec_name"] = make_category_column(df["spec_name"])
     df = df[df["class_name"].ne("") & df["spec_name"].ne("")].copy()
+    df = add_role_column(df)
     if mode in BLIZZARD_GAME_MODES:
         rating_floor = blizzard_mode_rating_floor(df, rating_column)
         if rating_floor is not None:
@@ -1038,13 +1095,19 @@ def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
     return df
 
 
-def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
+def make_summary_for_mode_region(
+    mode: str,
+    region_filter: str,
+    role_filter: str | None = ROLE_ALL,
+) -> pd.DataFrame:
     rating_column = GAME_MODE_COLUMNS.get(mode, "shuffle_rating")
     region_label = region_filter or "Both"
+    role_filter = normalize_role_filter(role_filter)
 
     df = mode_summary_source(mode, rating_column)
     if region_label != "Both":
         df = df[df["region"] == region_label.lower()]
+    df = apply_role_scope(df, role_filter)
 
     total_players = len(df)
     if not total_players:
@@ -1118,11 +1181,16 @@ def make_summary_for_mode_region(mode: str, region_filter: str) -> pd.DataFrame:
     return summary.sort_values(["class_name", "spec_name"], kind="mergesort")
 
 
-def make_summary(modes: list[str] | None, region_filters: list[str] | None) -> pd.DataFrame:
+def make_summary(
+    modes: list[str] | None,
+    region_filters: list[str] | None,
+    role_filter: str | None = ROLE_ALL,
+) -> pd.DataFrame:
     modes = modes or list(GAME_MODE_COLUMNS.keys())
     region_filters = region_filters or ["Both", "US", "EU"]
+    role_filter = normalize_role_filter(role_filter)
     frames = [
-        make_summary_for_mode_region(mode, region_filter)
+        make_summary_for_mode_region(mode, region_filter, role_filter)
         for mode in modes
         for region_filter in region_filters
     ]
@@ -1135,19 +1203,25 @@ def make_summary(modes: list[str] | None, region_filters: list[str] | None) -> p
 def make_summary_cache_key(
     modes: list[str] | None,
     region_filters: list[str] | None,
-) -> tuple[str | None, tuple[str, ...], tuple[str, ...]]:
+    role_filter: str | None = ROLE_ALL,
+) -> tuple[str | None, str, tuple[str, ...], tuple[str, ...]]:
     mode_key = tuple(modes or list(GAME_MODE_COLUMNS.keys()))
     region_key = tuple(region_filters or ["Both", "US", "EU"])
-    return DATA_VERSION, mode_key, region_key
+    role_key = normalize_role_filter(role_filter)
+    return DATA_VERSION, role_key, mode_key, region_key
 
 
-def make_summary_cached(modes: list[str] | None, region_filters: list[str] | None) -> pd.DataFrame:
-    key = make_summary_cache_key(modes, region_filters)
+def make_summary_cached(
+    modes: list[str] | None,
+    region_filters: list[str] | None,
+    role_filter: str | None = ROLE_ALL,
+) -> pd.DataFrame:
+    key = make_summary_cache_key(modes, region_filters, role_filter)
     cached = SUMMARY_CACHE.get(key)
     if cached is not None:
         return cached
 
-    summary = make_summary(list(key[1]), list(key[2]))
+    summary = make_summary(list(key[2]), list(key[3]), key[1])
     if len(SUMMARY_CACHE) >= SUMMARY_CACHE_MAX_ITEMS:
         SUMMARY_CACHE.pop(next(iter(SUMMARY_CACHE)))
     SUMMARY_CACHE[key] = summary
@@ -1279,10 +1353,11 @@ def prepare_average_chart_data(
     modes: list[str] | str | None,
     region_filter: str,
     summary_column: str,
+    role_filter: str | None = ROLE_ALL,
 ) -> pd.DataFrame:
     summary_column = summary_column if summary_column in SUMMARY_NUMERIC_COLUMNS else "lift_p80_plus"
     modes = selected_game_modes(modes)
-    df = make_summary_cached(modes, [region_filter]).copy()
+    df = make_summary_cached(modes, [region_filter], role_filter).copy()
     if df.empty or summary_column not in df:
         return pd.DataFrame()
 
@@ -1315,12 +1390,14 @@ def make_average_figure(
     modes: list[str] | str | None,
     region_filter: str,
     summary_column: str,
+    role_filter: str | None = ROLE_ALL,
 ) -> tuple[go.Figure, list[html.Img]]:
     go = plotly_go()
     summary_column = summary_column if summary_column in SUMMARY_NUMERIC_COLUMNS else "lift_p80_plus"
     metric_label = summary_metric_label(summary_column)
     selected_modes = selected_game_modes(modes)
-    df = prepare_average_chart_data(selected_modes, region_filter, summary_column)
+    role_filter = normalize_role_filter(role_filter)
+    df = prepare_average_chart_data(selected_modes, region_filter, summary_column, role_filter)
     if df.empty:
         return (
             empty_chart(f"Average {metric_label} by spec", "No summary data for selected filters."),
@@ -1356,7 +1433,11 @@ def make_average_figure(
         ]
     )
     mode_text = ", ".join(selected_modes)
-    apply_plot_theme(fig, f"{region_filter} avg {metric_label}: {mode_text}", f"Avg {metric_label}")
+    apply_plot_theme(
+        fig,
+        f"{region_filter} {role_filter} avg {metric_label}: {mode_text}",
+        f"Avg {metric_label}",
+    )
     fig.update_layout(images=chart_icon_images(labels, icons))
     fig.update_xaxes(
         range=[-0.6, len(df) - 0.4],
@@ -1489,7 +1570,7 @@ def make_violin_figure(mode: str, region_filter: str) -> tuple[go.Figure, list[h
 DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
 MAIN_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
 SUMMARY_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
-SUMMARY_CACHE: dict[tuple[str | None, tuple[str, ...], tuple[str, ...]], pd.DataFrame] = {}
+SUMMARY_CACHE: dict[tuple[str | None, str, tuple[str, ...], tuple[str, ...]], pd.DataFrame] = {}
 DATA_VERSION: str | None = None
 DATA_LAST_CHECK = 0.0
 
@@ -1703,6 +1784,7 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
 
     **How to use it**
 
+    - `Role Scope` controls the population used to calculate cutoffs, shares, and lift: All, Healers, Tanks, or DDs.
     - `Game Mode` selects the rating mode: Shuffle, Blitz BG, 2v2, 3v3, or RBG.
     - `Region` selects the slice: `Both`, `US`, or `EU`.
     - `Class` and `Spec` focus the table on specific classes/specs.
@@ -1717,7 +1799,7 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     - `Total Players` - number of active characters of that spec in the selected mode/region.
     - `n_p20`, `n_p20_p50`, `n_p50_p80`, `n_p80` - counts of spec players in `<P20`, `>=P20 & <P50`, `>=P50 & <P80`, and `>=P80`.
 
-    The `P20`, `P50`, and `P80` cutoffs are calculated across the full active selected mode/region sample, not separately inside each spec.
+    The `P20`, `P50`, and `P80` cutoffs are calculated across the active selected mode/region/role sample, not separately inside each spec.
 
     **Percentage columns**
 
@@ -1760,7 +1842,7 @@ CHARTS_GUIDE_EN = dedent(
     """
     ### Charts: how to read them
 
-    The first chart ranks specs by any numeric metric from the Spec Summary table. You can select one game mode, several modes, or all modes; the chart then averages the selected metric across those modes for each spec in one selected region. For example, choosing only Shuffle and `Lift P80+` reproduces the old lift chart. Choosing all modes and `pct_p80` shows which specs have the highest average share of players in the top 20% across modes.
+    The first chart ranks specs by any numeric metric from the Spec Summary table. You can select a role scope, one game mode, several modes, or all modes; the chart then averages the selected metric across those modes for each spec in one selected region and role scope. For example, choosing only Shuffle and `Lift P80+` reproduces the old lift chart. Choosing DDs in 2v2 recalculates cutoffs, shares, and lift only among damage specs.
 
     The hover shows the averaged metric, how many modes were included, and `Observations`: the summed `Total Players` used for that spec across the selected modes. This helps separate stable signals from tiny samples.
 
@@ -1855,6 +1937,12 @@ def make_charts_page() -> html.Div:
                     html.Div(
                         className="filters chart-filters",
                         children=[
+                            make_single_filter(
+                                "average-chart-role",
+                                "Role Scope",
+                                ROLE_FILTER_OPTIONS,
+                                ROLE_ALL,
+                            ),
                             make_multi_filter(
                                 "average-chart-modes",
                                 "Game Modes",
@@ -2066,6 +2154,12 @@ def layout() -> html.Div:
             html.Div(
                 className="filters summary-filters",
                 children=[
+                    make_single_filter(
+                        "summary-role-filter",
+                        "Role Scope",
+                        ROLE_FILTER_OPTIONS,
+                        ROLE_ALL,
+                    ),
                     make_multi_filter(
                         "summary-mode-filter",
                         "Game Mode",
@@ -2213,6 +2307,7 @@ def reset_main_page_on_query_change(
 
 @app.callback(
     Output("summary-table", "page_current"),
+    Input("summary-role-filter", "value"),
     Input("summary-mode-filter", "value"),
     Input("summary-region-filter", "value"),
     Input("summary-class-filter", "value"),
@@ -2221,6 +2316,7 @@ def reset_main_page_on_query_change(
     Input("summary-page-size", "value"),
 )
 def reset_summary_page_on_query_change(
+    _role_filter: str | None,
     _modes: list[str] | None,
     _regions: list[str] | None,
     _classes: list[str] | None,
@@ -2280,6 +2376,7 @@ def filter_main_rows(
     Output("summary-table", "page_count"),
     Output("summary-row-count", "children"),
     Output("summary-table", "columns"),
+    Input("summary-role-filter", "value"),
     Input("summary-mode-filter", "value"),
     Input("summary-region-filter", "value"),
     Input("summary-class-filter", "value"),
@@ -2291,6 +2388,7 @@ def filter_main_rows(
     Input("summary-table", "sort_by"),
 )
 def update_summary_rows(
+    role_filter: str | None,
     modes: list[str] | None,
     regions: list[str] | None,
     classes: list[str] | None,
@@ -2304,7 +2402,7 @@ def update_summary_rows(
     refresh_application_data_if_changed()
     visible_ids = summary_visible_column_ids(optional_columns)
     visible_columns = summary_visible_columns(optional_columns)
-    df = make_summary_cached(modes, regions)
+    df = make_summary_cached(modes, regions, role_filter)
     df = apply_string_filters(df, {"class_name": classes, "spec_name": specs})
     df = apply_numeric_ranges(df, SUMMARY_NUMERIC_COLUMNS, range_values, SUMMARY_RANGE_BOUNDS)
     visible_sort_by = [
@@ -2345,12 +2443,14 @@ def update_violin_chart(
     Output("average-chart", "figure"),
     Output("average-chart-icons", "children"),
     Input("site-tabs", "value"),
+    Input("average-chart-role", "value"),
     Input("average-chart-modes", "value"),
     Input("average-chart-region", "value"),
     Input("average-chart-column", "value"),
 )
 def update_average_chart(
     active_tab: str | None,
+    role_filter: str | None,
     modes: list[str] | None,
     region_filter: str | None,
     summary_column: str | None,
@@ -2360,7 +2460,7 @@ def update_average_chart(
     refresh_application_data_if_changed()
     region_filter = region_filter or "Both"
     summary_column = summary_column or "lift_p80_plus"
-    return make_average_figure(modes, region_filter, summary_column)
+    return make_average_figure(modes, region_filter, summary_column, role_filter)
 
 
 @app.callback(
@@ -2371,6 +2471,7 @@ def update_average_chart(
     Output("spec-filter", "value"),
     Output({"type": "main-rating-range", "column": ALL}, "value"),
     Output("pvp-table", "sort_by"),
+    Output("summary-role-filter", "value"),
     Output("summary-mode-filter", "value"),
     Output("summary-region-filter", "value"),
     Output("summary-class-filter", "value"),
@@ -2391,6 +2492,7 @@ def reset_filters(
     None,
     list[list[float | int]],
     list,
+    str,
     list[str],
     list[str],
     None,
@@ -2408,6 +2510,7 @@ def reset_filters(
         None,
         default_range_values(RATING_COLUMNS, MAIN_RANGE_BOUNDS),
         [],
+        ROLE_ALL,
         ["Shuffle"],
         ["Both"],
         None,
