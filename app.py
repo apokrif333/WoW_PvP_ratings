@@ -37,6 +37,8 @@ ROLE_TANKS = "Tanks"
 ROLE_DDS = "DDs"
 ROLE_FILTER_VALUES = [ROLE_ALL, ROLE_HEALERS, ROLE_TANKS, ROLE_DDS]
 ROLE_FILTER_OPTIONS = [{"label": value, "value": value} for value in ROLE_FILTER_VALUES]
+REGION_FILTER_VALUES = ["Both", "US", "EU"]
+REGION_FILTER_OPTIONS = [{"label": value, "value": value} for value in REGION_FILTER_VALUES]
 HEALER_SPECS = {
     ("Druid", "Restoration"),
     ("Evoker", "Preservation"),
@@ -395,6 +397,24 @@ def apply_role_scope(df: pd.DataFrame, role_filter: str | None) -> pd.DataFrame:
     if role_filter == ROLE_ALL or "role_filter" not in df.columns:
         return df
     return df[df["role_filter"] == role_filter]
+
+
+def selected_summary_modes(modes: list[str] | str | None) -> list[str]:
+    if isinstance(modes, str):
+        requested = {modes}
+    else:
+        requested = set(modes or [])
+    selected = [mode for mode in GAME_MODE_COLUMNS if mode in requested]
+    return selected or list(GAME_MODE_COLUMNS.keys())
+
+
+def selected_region_filters(region_filters: list[str] | str | None) -> list[str]:
+    if isinstance(region_filters, str):
+        requested = {region_filters}
+    else:
+        requested = set(region_filters or [])
+    selected = [region for region in REGION_FILTER_VALUES if region in requested]
+    return selected or REGION_FILTER_VALUES
 
 
 def make_options(values: pd.Series) -> list[dict[str, str]]:
@@ -1035,25 +1055,78 @@ def blizzard_mode_rating_floor(df: pd.DataFrame, rating_column: str) -> int | No
     return int(floors.max())
 
 
-def make_p80_lift_tooltip() -> str:
+def p80_lift_threshold(mode: str, region_filter: str, role_filter: str | None) -> float | None:
+    role_filter = normalize_role_filter(role_filter)
+    key = (DATA_VERSION, mode, region_filter, role_filter)
+    if key in LIFT_THRESHOLD_CACHE:
+        return LIFT_THRESHOLD_CACHE[key]
+
+    rating_column = GAME_MODE_COLUMNS.get(mode)
+    if not rating_column:
+        return None
+
+    df = mode_summary_source(mode, rating_column)
+    if region_filter != "Both":
+        df = df[df["region"] == region_filter.lower()]
+    df = apply_role_scope(df, role_filter)
+    cutoff = mode_percentile_cutoff(df, rating_column)
+    LIFT_THRESHOLD_CACHE[key] = cutoff
+    return cutoff
+
+
+def format_lift_thresholds(
+    modes: list[str] | str | None,
+    region_filters: list[str] | str | None,
+    role_filter: str | None,
+    limit: int = 12,
+) -> str:
+    role_filter = normalize_role_filter(role_filter)
+    items = []
+    for mode in selected_summary_modes(modes):
+        for region_filter in selected_region_filters(region_filters):
+            cutoff = p80_lift_threshold(mode, region_filter, role_filter)
+            if cutoff is not None:
+                items.append(f"{mode}/{region_filter}/{role_filter}: P80={int(round(cutoff))}")
+
+    if not items:
+        return "нет активных рейтингов для выбранного среза"
+    if len(items) > limit:
+        return "; ".join(items[:limit]) + f"; +{len(items) - limit} еще"
+    return "; ".join(items)
+
+
+def make_p80_lift_tooltip(
+    modes: list[str] | str | None = None,
+    region_filters: list[str] | str | None = None,
+    role_filter: str | None = ROLE_ALL,
+) -> str:
+    role_filter = normalize_role_filter(role_filter)
     if DATA.empty:
         return (
             "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
-            "P80 cutoff is calculated per game mode, region, and role scope from active characters with rating > 0."
+            "P80 threshold для lift считается внутри выбранного режима, региона и Role Scope."
         )
 
-    cutoffs = []
-    for mode, rating_column in GAME_MODE_COLUMNS.items():
-        cutoff = mode_percentile_cutoff(mode_summary_source(mode, rating_column), rating_column)
-        if cutoff is not None:
-            cutoffs.append(f"{mode} - lift cutoff {int(round(cutoff))}")
-
-    cutoff_text = ", ".join(cutoffs) if cutoffs else "no active ratings yet"
+    threshold_text = format_lift_thresholds(modes, region_filters, role_filter)
     return (
         "lift_p80_plus = spec_share_p80_plus / overall_spec_share among active mode players. "
-        "The P80+ band is the rank-based top 20% of active characters "
-        f"(rating > 0) in the same game mode, region, and role scope. Current Both/All boundary ratings: {cutoff_text}."
+        "P80+ band = верхние 20% активных персонажей внутри выбранного режима, региона и Role Scope. "
+        f"Текущий Role Scope: {role_filter}. Threshold для lift: {threshold_text}."
     )
+
+
+def make_summary_column_tooltips(
+    role_filter: str | None,
+    modes: list[str] | str | None,
+    region_filters: list[str] | str | None,
+) -> dict[str, str]:
+    tooltips = SUMMARY_COLUMN_TOOLTIPS.copy()
+    tooltips["n_p20"] = "n_p20 = COUNT(rating < P20 threshold) в выбранном mode/region/role scope."
+    tooltips["n_p20_p50"] = "n_p20_p50 = COUNT(rating >= P20 AND rating < P50) в выбранном mode/region/role scope."
+    tooltips["n_p50_p80"] = "n_p50_p80 = COUNT(rating >= P50 AND rating < P80) в выбранном mode/region/role scope."
+    tooltips["n_p80"] = "n_p80 = COUNT(rating >= P80 threshold) в выбранном mode/region/role scope."
+    tooltips["lift_p80_plus"] = make_p80_lift_tooltip(modes, region_filters, role_filter)
+    return tooltips
 
 
 def mode_summary_source(mode: str, rating_column: str) -> pd.DataFrame:
@@ -1186,8 +1259,8 @@ def make_summary(
     region_filters: list[str] | None,
     role_filter: str | None = ROLE_ALL,
 ) -> pd.DataFrame:
-    modes = modes or list(GAME_MODE_COLUMNS.keys())
-    region_filters = region_filters or ["Both", "US", "EU"]
+    modes = selected_summary_modes(modes)
+    region_filters = selected_region_filters(region_filters)
     role_filter = normalize_role_filter(role_filter)
     frames = [
         make_summary_for_mode_region(mode, region_filter, role_filter)
@@ -1205,8 +1278,8 @@ def make_summary_cache_key(
     region_filters: list[str] | None,
     role_filter: str | None = ROLE_ALL,
 ) -> tuple[str | None, str, tuple[str, ...], tuple[str, ...]]:
-    mode_key = tuple(modes or list(GAME_MODE_COLUMNS.keys()))
-    region_key = tuple(region_filters or ["Both", "US", "EU"])
+    mode_key = tuple(selected_summary_modes(modes))
+    region_key = tuple(selected_region_filters(region_filters))
     role_key = normalize_role_filter(role_filter)
     return DATA_VERSION, role_key, mode_key, region_key
 
@@ -1341,12 +1414,7 @@ def empty_chart(title: str, message: str) -> go.Figure:
 
 
 def selected_game_modes(modes: list[str] | str | None) -> list[str]:
-    if isinstance(modes, str):
-        requested = {modes}
-    else:
-        requested = set(modes or [])
-    selected = [mode for mode in GAME_MODE_COLUMNS if mode in requested]
-    return selected or list(GAME_MODE_COLUMNS.keys())
+    return selected_summary_modes(modes)
 
 
 def prepare_average_chart_data(
@@ -1571,6 +1639,7 @@ DATA = pd.DataFrame(columns=APP_DATA_COLUMNS)
 MAIN_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
 SUMMARY_RANGE_BOUNDS: dict[str, dict[str, float | int]] = {}
 SUMMARY_CACHE: dict[tuple[str | None, str, tuple[str, ...], tuple[str, ...]], pd.DataFrame] = {}
+LIFT_THRESHOLD_CACHE: dict[tuple[str | None, str, str, str], float | None] = {}
 DATA_VERSION: str | None = None
 DATA_LAST_CHECK = 0.0
 
@@ -1600,7 +1669,8 @@ def reload_application_data() -> None:
     )
     DATA_VERSION = dataset_version(DATA_PATH)
     SUMMARY_CACHE.clear()
-    SUMMARY_COLUMN_TOOLTIPS["lift_p80_plus"] = make_p80_lift_tooltip()
+    LIFT_THRESHOLD_CACHE.clear()
+    SUMMARY_COLUMN_TOOLTIPS["lift_p80_plus"] = make_p80_lift_tooltip(["Shuffle"], ["Both"], ROLE_ALL)
     gc.collect()
 
 
@@ -1715,12 +1785,13 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     """
     ### Spec Summary: что показывает вторая таблица
 
-    Summary агрегирует активных персонажей по связке **Class + Spec + Game Mode + Region**. Она отвечает не на вопрос "кто конкретно играет", а на вопрос **как распределены спеки в режиме и насколько часто конкретный спек встречается в верхней части рейтинга**.
+    Summary агрегирует активных персонажей по связке **Class + Spec + Game Mode + Region + Role Scope**. Она отвечает не на вопрос "кто конкретно играет", а на вопрос **как распределены спеки в режиме и насколько часто конкретный спек встречается в верхней части рейтинга**.
 
     В summary попадают только активные значения выбранного режима: `rating > 0`. Для Shuffle и Blitz BG дополнительно используется обрезка нижнего края ladder-данных Blizzard, чтобы сравнение между спеками не ломалось из-за лимита API.
 
     **Как пользоваться**
 
+    - `Role Scope` выбирает популяцию для расчета порогов, долей и lift: `All`, `Healers`, `Tanks` или `DDs`.
     - `Game Mode` выбирает режим анализа: Shuffle, Blitz BG, 2v2, 3v3 или RBG.
     - `Region` выбирает срез: `Both`, `US`, `EU`.
     - `Class` и `Spec` позволяют смотреть конкретный класс/спек или сравнивать несколько.
@@ -1732,10 +1803,10 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     - `Spec`, `Class` - специализация и класс, по которым сделана агрегация.
     - `Game Mode` - режим, рейтинг которого используется в расчетах.
     - `Region` - срез региона: Both, EU или US.
-    - `Total Players` - количество активных персонажей этого спека в выбранном режиме/регионе.
+    - `Total Players` - количество активных персонажей этого спека в выбранном режиме/регионе/role scope.
     - `n_p20`, `n_p20_p50`, `n_p50_p80`, `n_p80` - сколько персонажей спека попало в диапазоны `<P20`, `>=P20 & <P50`, `>=P50 & <P80`, `>=P80`.
 
-    Пороги `P20`, `P50` и `P80` считаются по всей активной выборке выбранного режима и региона, а не отдельно внутри спека.
+    Пороги `P20`, `P50` и `P80` считаются по всей активной выборке выбранного режима, региона и role scope, а не отдельно внутри спека.
 
     **Процентные колонки**
 
@@ -1744,7 +1815,7 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     - `pct_p50_p80 = n_p50_p80 / total_players`.
     - `pct_p80 = n_p80 / total_players`.
 
-    Эти колонки показывают внутреннюю структуру спека относительно распределения всего режима. Например, высокий `pct_p80` значит, что заметная часть игроков спека находится в верхних 20% выбранного режима.
+    Эти колонки показывают внутреннюю структуру спека относительно распределения выбранного mode/region/role scope. Например, высокий `pct_p80` значит, что заметная часть игроков спека находится в верхних 20% выбранной ролевой выборки.
 
     **Средние и процентили**
 
@@ -1760,6 +1831,8 @@ SUMMARY_TABLE_GUIDE_RU = dedent(
     - `overall_spec_share = total_players_спека / total_players_всех_спеков`.
     - `spec_share_p80_plus = players_спека_с_rating>=P80 / players_всех_спеков_с_rating>=P80`.
     - `lift_p80_plus = spec_share_p80_plus / overall_spec_share`.
+
+    Для `Role Scope = DDs` все три значения считаются только среди DD-спеков. Для `Healers` - только среди хилеров, для `Tanks` - только среди танков. Это важно для 2v2: хилеры не попадают в denominator для DDs и не искажают lift damage-спеков.
 
     Если `lift_p80_plus = 1.00`, спек представлен в верхних 20% примерно так же, как в общей популяции. Если `lift_p80_plus = 1.50`, спек встречается в верхних 20% на 50% чаще, чем ожидалось по его общей доле. Если `0.70`, спек недопредставлен.
 
@@ -1778,7 +1851,7 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     """
     ### Spec Summary: what the second table shows
 
-    The summary table aggregates active characters by **Class + Spec + Game Mode + Region**. Active means the character has `rating > 0` in the selected mode. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears in the upper rating bands**.
+    The summary table aggregates active characters by **Class + Spec + Game Mode + Region + Role Scope**. Active means the character has `rating > 0` in the selected mode. It is not about individual players; it is about **how specs are distributed in a mode and how often a spec appears in the upper rating bands**.
 
     For Shuffle and Blitz BG, the lower edge of Blizzard ladder data is trimmed before this summary is calculated, so high-population and low-population specs are compared on the same visible ladder floor.
 
@@ -1825,6 +1898,8 @@ SUMMARY_TABLE_GUIDE_EN = dedent(
     - `spec_share_p80_plus = spec_players_rating>=P80 / all_specs_players_rating>=P80`.
     - `lift_p80_plus = spec_share_p80_plus / overall_spec_share`.
 
+    With `Role Scope = DDs`, these denominators include only damage specs. With `Healers` or `Tanks`, they include only that role. This keeps 2v2 healer populations from distorting DD lift.
+
     If `lift_p80_plus = 1.00`, the spec is represented in the top 20% roughly as often as expected from its overall population share. If `lift_p80_plus = 1.50`, the spec appears in the top 20% 50% more often than expected. If it is `0.70`, the spec is underrepresented.
 
     **How to interpret lift**
@@ -1855,7 +1930,7 @@ CHARTS_GUIDE_RU = dedent(
     """
     ### Графики: как их читать
 
-    Первый график ранжирует спеки по любой числовой метрике из таблицы Spec Summary. Можно выбрать один режим, несколько режимов или все режимы; график усреднит выбранную метрику по этим режимам для каждого спека в одном выбранном регионе. Например, если выбрать только Shuffle и `Lift P80+`, получится старый lift-график. Если выбрать все режимы и `pct_p80`, будет видно, у каких спеков самая высокая средняя доля игроков в верхних 20% по режимам.
+    Первый график ранжирует спеки по любой числовой метрике из таблицы Spec Summary. Можно выбрать `Role Scope`, один режим, несколько режимов или все режимы; график усреднит выбранную метрику по этим режимам для каждого спека в одном выбранном регионе и role scope. Например, если выбрать только Shuffle и `Lift P80+`, получится старый lift-график. Если выбрать `DDs` в 2v2, пороги, доли и lift будут пересчитаны только среди damage-спеков.
 
     При наведении показывается среднее значение метрики, сколько режимов вошло в расчёт, и `Observations`: сумма `Total Players` по выбранным режимам для этого спека. Так видно, где сигнал построен на большой выборке, а где на малом числе наблюдений.
 
@@ -1904,11 +1979,7 @@ def make_info_tabs(
 
 def make_charts_page() -> html.Div:
     mode_options = [{"label": label, "value": label} for label in GAME_MODE_COLUMNS.keys()]
-    region_options = [
-        {"label": "Both", "value": "Both"},
-        {"label": "EU", "value": "EU"},
-        {"label": "US", "value": "US"},
-    ]
+    region_options = REGION_FILTER_OPTIONS
     average_column_options = make_column_options(SUMMARY_NUMERIC_COLUMNS)
     graph_config = {"displaylogo": False, "responsive": True}
 
@@ -2170,11 +2241,7 @@ def layout() -> html.Div:
                     make_multi_filter(
                         "summary-region-filter",
                         "Region",
-                        [
-                            {"label": "Both", "value": "Both"},
-                            {"label": "US", "value": "US"},
-                            {"label": "EU", "value": "EU"},
-                        ],
+                        REGION_FILTER_OPTIONS,
                         "All region views",
                         ["Both"],
                     ),
@@ -2221,7 +2288,7 @@ def layout() -> html.Div:
             dash_table.DataTable(
                 id="summary-table",
                 columns=summary_visible_columns(SUMMARY_DEFAULT_OPTIONAL_COLUMN_IDS),
-                tooltip_header=SUMMARY_COLUMN_TOOLTIPS,
+                tooltip_header=make_summary_column_tooltips(ROLE_ALL, ["Shuffle"], ["Both"]),
                 tooltip_delay=250,
                 tooltip_duration=None,
                 data=[],
@@ -2376,6 +2443,7 @@ def filter_main_rows(
     Output("summary-table", "page_count"),
     Output("summary-row-count", "children"),
     Output("summary-table", "columns"),
+    Output("summary-table", "tooltip_header"),
     Input("summary-role-filter", "value"),
     Input("summary-mode-filter", "value"),
     Input("summary-region-filter", "value"),
@@ -2398,10 +2466,11 @@ def update_summary_rows(
     page_current: int | None,
     page_size: int | None,
     sort_by: list[dict] | None,
-) -> tuple[list[dict], int, str, list[dict[str, Any]]]:
+) -> tuple[list[dict], int, str, list[dict[str, Any]], dict[str, str]]:
     refresh_application_data_if_changed()
     visible_ids = summary_visible_column_ids(optional_columns)
     visible_columns = summary_visible_columns(optional_columns)
+    tooltip_header = make_summary_column_tooltips(role_filter, modes, regions)
     df = make_summary_cached(modes, regions, role_filter)
     df = apply_string_filters(df, {"class_name": classes, "spec_name": specs})
     df = apply_numeric_ranges(df, SUMMARY_NUMERIC_COLUMNS, range_values, SUMMARY_RANGE_BOUNDS)
@@ -2416,6 +2485,7 @@ def update_summary_rows(
         page_count,
         f"{len(df):,} specs",
         visible_columns,
+        tooltip_header,
     )
 
 
